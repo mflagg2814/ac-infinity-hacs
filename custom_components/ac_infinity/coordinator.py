@@ -65,8 +65,19 @@ class ACInfinityDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None]
     async def _async_update(
         self, service_info: bluetooth.BluetoothServiceInfoBleak
     ) -> None:
-        """Poll the device."""
-        await self.controller.update()
+        """Poll the device once and refresh cached state.
+
+        BlueZ occasionally closes the DBus socket before it finishes sending the
+        Disconnect() reply.  That raises an EOFError after we’ve already read the
+        data we need.  Catch and ignore it so it doesn’t fill Home Assistant’s log.
+        """
+        try:
+            await self.controller.update()
+        except EOFError:
+            _LOGGER.debug(
+                "%s: Ignored EOFError during disconnect – benign BlueZ race",
+                self.device.name,
+            )
 
     @callback
     def _async_handle_unavailable(
