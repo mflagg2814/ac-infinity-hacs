@@ -18,6 +18,9 @@ from homeassistant.core import CoreState, HomeAssistant, callback
 
 DEVICE_STARTUP_TIMEOUT = 30
 
+import logging
+_LOGGER = logging.getLogger(__name__)
+
 
 class ACInfinityDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
     """Class to manage fetching switchbot data."""
