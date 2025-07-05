@@ -73,7 +73,13 @@ class ACInfinityFan(
         if percentage > 0:
             speed = math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage))
 
-        await self._device.set_speed(speed)
+        try:
+            await self._device.set_speed(speed)
+        except EOFError:
+            _LOGGER.debug(
+                "%s: Ignored EOFError - device disconnects early after command",
+                self._device.name,
+            )
 
     async def async_turn_on(
         self,
@@ -85,11 +91,24 @@ class ACInfinityFan(
         speed = None
         if percentage is not None:
             speed = math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage))
-        await self._device.turn_on(speed)
+
+        try:
+            await self._device.turn_on(speed)
+        except EOFError:
+            _LOGGER.debug(
+                "%s: Ignored EOFError - device disconnects early after command",
+                self._device.name,
+            )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off the fan."""
-        await self._device.turn_off()
+        try:
+            await self._device.turn_off()
+        except EOFError:
+            _LOGGER.debug(
+                "%s: Ignored EOFError - device disconnects early after command",
+                self._device.name,
+            )
 
     @callback
     def _async_update_attrs(self) -> None:
