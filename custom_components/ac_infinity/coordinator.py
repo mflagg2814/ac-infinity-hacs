@@ -79,7 +79,7 @@ class ACInfinityDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None]
         except EOFError:
             _LOGGER.debug(
                 "%s: Ignored EOFError during disconnect – benign BlueZ race",
-                self.device.name,
+                self.ble_device.name,
             )
 
     @callback
