@@ -60,10 +60,15 @@ class ACInfinitySensor(
             name=device.name,
             model=DEVICE_MODEL[device.state.type],
             manufacturer="AC Infinity",
-            sw_version=device.state.version,
+            sw_version=str(device.state.version),
             connections={(dr.CONNECTION_BLUETOOTH, device.address)},
         )
         self._async_update_attrs()
+
+    @property
+    def available(self) -> bool:
+        """Unavailable until a sensor advertisement arrives; then while the device is reachable."""
+        return self.coordinator.has_sensor_data and self.coordinator.reachable
 
     @callback
     def _async_update_attrs(self) -> None:

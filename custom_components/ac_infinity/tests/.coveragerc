@@ -1,0 +1,6 @@
+# Coverage config for the AC Infinity test suite.
+# Exclude the tests themselves so the reported percentage reflects the integration
+# code only (used via --cov-config; see pytest.ini addopts).
+[run]
+omit =
+    */ac_infinity/tests/*

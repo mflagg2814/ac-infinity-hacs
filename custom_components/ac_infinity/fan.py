@@ -1,6 +1,8 @@
 """The ac_infinity fan platform."""
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 import math
 from typing import Any
 
@@ -28,8 +30,12 @@ from .models import ACInfinityData
 
 SPEED_RANGE = (1, 10)
 
-import logging
-_LOGGER = logging.getLogger(__name__)
+
+def _speed_level(percentage: int) -> int:
+    """Map a percentage to the controller's 0-10 level."""
+    if percentage <= 0:
+        return 0
+    return math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage))
 
 
 async def async_setup_entry(
@@ -65,24 +71,20 @@ class ACInfinityFan(
             name=device.name,
             model=DEVICE_MODEL[device.state.type],
             manufacturer="AC Infinity",
-            sw_version=device.state.version,
+            sw_version=str(device.state.version),
             connections={(dr.CONNECTION_BLUETOOTH, device.address)},
         )
         self._async_update_attrs()
 
+    @property
+    def available(self) -> bool:
+        """Unavailable until real fan data arrives; then while the device is reachable."""
+        return self.coordinator.has_fan_data and self.coordinator.reachable
+
     async def async_set_percentage(self, percentage: int) -> None:
         """Set the speed of the fan, as a percentage."""
-        speed = 0
-        if percentage > 0:
-            speed = math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage))
-
-        try:
-            await self._device.set_speed(speed)
-        except EOFError:
-            _LOGGER.debug(
-                "%s: Ignored EOFError - device disconnects early after command",
-                self._device.name,
-            )
+        speed = _speed_level(percentage)
+        await self._async_command(partial(self._device.set_speed, speed))
 
     async def async_turn_on(
         self,
@@ -91,27 +93,18 @@ class ACInfinityFan(
         **kwargs: Any,
     ) -> None:
         """Turn on the fan."""
-        speed = None
-        if percentage is not None:
-            speed = math.ceil(percentage_to_ranged_value(SPEED_RANGE, percentage))
-
-        try:
-            await self._device.turn_on(speed)
-        except EOFError:
-            _LOGGER.debug(
-                "%s: Ignored EOFError - device disconnects early after command",
-                self._device.name,
-            )
+        speed = None if percentage is None else _speed_level(percentage)
+        await self._async_command(partial(self._device.turn_on, speed))
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off the fan."""
-        try:
-            await self._device.turn_off()
-        except EOFError:
-            _LOGGER.debug(
-                "%s: Ignored EOFError - device disconnects early after command",
-                self._device.name,
-            )
+        await self._async_command(self._device.turn_off)
+
+    async def _async_command(self, command: Callable[[], Awaitable[None]]) -> None:
+        """Show the commanded state; the device only reports it in a later advertisement."""
+        await self.coordinator.async_run(command)
+        self._async_update_attrs()
+        self.async_write_ha_state()
 
     @callback
     def _async_update_attrs(self) -> None:

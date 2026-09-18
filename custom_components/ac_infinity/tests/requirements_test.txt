@@ -1,0 +1,18 @@
+# Test dependencies for the ac_infinity test suite.
+#
+# Tracks a published pytest-homeassistant-custom-component release, which pins a
+# matching Home Assistant Core version plus the full HA test toolkit. To match a
+# specific deployed Core version instead, see the release list:
+# https://github.com/MatthewFlamm/pytest-homeassistant-custom-component/releases
+pytest-homeassistant-custom-component==0.13.364
+
+# For `--cov` coverage reporting (not bundled by phacc).
+pytest-cov
+
+# The BLE library pinned in manifest.json, plus modules the test environment lacks.
+# The library imports async_timeout without declaring it. aiousbwatcher and serialx
+# are the usb component's requirements, needed to import homeassistant.components.bluetooth.
+ac-infinity-ble @ git+https://github.com/SethCalkins/ac-infinity-ble@df1bd7858726828eaf22fa0b9bff7686908dc5b5
+async-timeout==5.0.1
+aiousbwatcher==1.1.2
+serialx==1.10.0

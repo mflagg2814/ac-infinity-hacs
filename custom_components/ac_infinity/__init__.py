@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from ac_infinity_ble import ACInfinityController, DeviceInfo
+from bleak import BleakClient
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
@@ -22,6 +23,28 @@ from .models import ACInfinityData
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.FAN]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ensure_get_services_compat() -> None:
+    """Restore BleakClient.get_services() for the ac_infinity_ble library.
+
+    bleak removed the deprecated ``BleakClient.get_services()`` coroutine in
+    favor of the ``BleakClient.services`` property. The ac_infinity_ble library
+    still calls ``await client.get_services()`` in ``Device._ensure_connected``,
+    which raises ``AttributeError`` on current Home Assistant builds and breaks
+    every command (e.g. ``fan.set_percentage``). Re-add a thin async shim that
+    returns the cached services collection so the library works unchanged.
+    """
+    if hasattr(BleakClient, "get_services"):
+        return
+
+    async def get_services(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return self.services
+
+    BleakClient.get_services = get_services
+
+
+_ensure_get_services_compat()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
