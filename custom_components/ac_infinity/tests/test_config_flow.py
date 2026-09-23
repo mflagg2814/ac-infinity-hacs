@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ac_infinity_ble.const import MANUFACTURER_ID
-from ac_infinity_ble.protocol import parse_manufacturer_data
 import pytest
 
 from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_USER
@@ -12,12 +10,11 @@ from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.ac_infinity.const import DOMAIN, BLEAK_EXCEPTIONS
+from custom_components.ac_infinity.vendor.ac_infinity_ble.const import MANUFACTURER_ID
 
-from .conftest import ADDRESS
+from .conftest import ADDRESS, SEED_STATE, SENSOR_PAYLOAD
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-# All zero, but long enough for parse_manufacturer_data to read a real DeviceInfo.
-SENSOR_PAYLOAD = bytes(19)
 OTHER_ADDRESS = "AA:BB:CC:DD:EE:FF"
 
 
@@ -64,6 +61,17 @@ async def test_bluetooth_discovery_aborts_when_already_configured(hass):
     assert result["reason"] == "already_configured"
 
 
+async def test_bluetooth_discovery_aborts_on_an_unsupported_payload(hass):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_BLUETOOTH},
+        data=discovery(manufacturer_data={MANUFACTURER_ID: bytes(19)}),
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_devices_found"
+
+
 # ===========================================================================
 # The user step's device list
 # ===========================================================================
@@ -90,7 +98,11 @@ async def test_user_step_skips_already_configured_addresses(hass):
 async def test_user_step_ignores_non_ac_infinity_devices(hass):
     result = await _init_user_step(
         hass,
-        [discovery(), discovery(OTHER_ADDRESS, manufacturer_data={})],
+        [
+            discovery(),
+            discovery(OTHER_ADDRESS, manufacturer_data={}),
+            discovery("11:22:33:44:55:66", manufacturer_data={MANUFACTURER_ID: bytes(19)}),
+        ],
     )
 
     addresses = result["data_schema"].schema[CONF_ADDRESS].container
@@ -111,6 +123,7 @@ async def test_user_step_aborts_when_no_devices_found(hass):
 def controller():
     controller = MagicMock()
     controller.name = "A-0ECGN"
+    controller.state = SEED_STATE
     controller.update = AsyncMock()
     controller.stop = AsyncMock()
     return controller
@@ -129,7 +142,7 @@ async def test_selecting_a_device_creates_the_entry(hass, controller):
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "A-0ECGN"
     assert result["data"][CONF_ADDRESS] == ADDRESS
-    assert result["data"][CONF_SERVICE_DATA] == parse_manufacturer_data(SENSOR_PAYLOAD)
+    assert result["data"][CONF_SERVICE_DATA] == {"type": 1, "name": "A-0ECGN", "version": 0}
     controller.stop.assert_awaited_once()
 
 

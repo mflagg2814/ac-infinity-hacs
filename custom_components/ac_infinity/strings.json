@@ -9,5 +9,29 @@
       "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
       "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
     }
+  },
+  "entity": {
+    "fan": {
+      "fan": {
+        "name": "Fan"
+      }
+    },
+    "sensor": {
+      "vpd": {
+        "name": "VPD"
+      },
+      "clock_sync": {
+        "name": "Last Clock Sync",
+        "state": {
+          "confirmed": "Confirmed",
+          "unconfirmed": "Set, not confirmed",
+          "mismatch": "Reads back wrong",
+          "failed": "Failed"
+        }
+      },
+      "clock_drift": {
+        "name": "Last Clock Drift"
+      }
+    }
   }
 }

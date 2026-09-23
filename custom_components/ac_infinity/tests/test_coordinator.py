@@ -1,12 +1,12 @@
-"""Coordinator: scan window requests, sensor data, polls, and poll timing."""
+"""Coordinator: scan window requests, sensor data, polls, clock syncs, and their timing."""
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+from datetime import UTC, timedelta
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-from ac_infinity_ble.const import MANUFACTURER_ID
-from ac_infinity_ble.exceptions import CharacteristicMissingError
 from bleak.exc import BleakError
 import pytest
 
@@ -14,15 +14,17 @@ from homeassistant.components.bluetooth import BluetoothCallbackReplay, Bluetoot
 from homeassistant.components.bluetooth.passive_update_coordinator import (
     PassiveBluetoothDataUpdateCoordinator,
 )
-from homeassistant.core import CoreState
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
+from homeassistant.core import CoreState, Event
+from homeassistant.util import dt as dt_util
 
 from custom_components.ac_infinity import coordinator as coordinator_module
+from custom_components.ac_infinity.backoff import BACKOFF_BASE
 from custom_components.ac_infinity.coordinator import ACTIVE_SCAN_INTERVAL, carries_sensor_data
-from custom_components.ac_infinity.polling import BACKOFF_BASE, STALL_AFTER
+from custom_components.ac_infinity.polling import STALL_AFTER
+from custom_components.ac_infinity.vendor.ac_infinity_ble.const import MANUFACTURER_ID
 
-from .conftest import ADDRESS, advertise, service_info
-
-SENSOR_PAYLOAD = bytes(19)
+from .conftest import ADDRESS, SEED_STATE, SENSOR_PAYLOAD, advertise, service_info
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +32,12 @@ def window_open():
     """The active scan window state; closed unless a test opens it."""
     with patch.object(coordinator_module, "active_window_open", return_value=False) as mock:
         yield mock
+
+
+@pytest.fixture(autouse=True)
+def clock_synced(coordinator):
+    """The clock was just synced, so ticks only poll; clock tests call mark_due."""
+    coordinator.clock._schedule.mark_success(dt_util.utcnow(), UTC)
 
 
 def _polled(coordinator) -> None:
@@ -48,7 +56,8 @@ def _stall(coordinator) -> None:
     ("manufacturer_data", "expected"),
     [
         ({}, False),
-        ({MANUFACTURER_ID: bytes(18)}, False),
+        ({MANUFACTURER_ID: SENSOR_PAYLOAD[:17]}, False),
+        ({MANUFACTURER_ID: SENSOR_PAYLOAD[:26]}, False),
         ({MANUFACTURER_ID: SENSOR_PAYLOAD}, True),
         ({76: SENSOR_PAYLOAD}, False),
     ],
@@ -75,7 +84,7 @@ def test_start_requests_scan_windows_and_the_poll_tick(coordinator):
         "scan_interval": ACTIVE_SCAN_INTERVAL,
         "replay": BluetoothCallbackReplay.DISABLED,
     }
-    assert track.call_args.args[1] == coordinator._async_poll_tick
+    assert track.call_args.args[1] == coordinator._async_tick
 
 
 def test_own_registration_adds_no_default_windows(coordinator):
@@ -89,7 +98,7 @@ def test_own_registration_adds_no_default_windows(coordinator):
     assert register.call_args.args[3] is BluetoothScanningMode.PASSIVE
 
 
-def test_stop_cancels_everything(coordinator):
+async def test_stop_cancels_everything(hass, coordinator):
     cancels = [MagicMock(), MagicMock(), MagicMock()]
     with (
         patch.object(PassiveBluetoothDataUpdateCoordinator, "async_start", return_value=cancels[0]),
@@ -99,6 +108,9 @@ def test_stop_cancels_everything(coordinator):
         coordinator.async_start()()
     for cancel in cancels:
         cancel.assert_called_once()
+    hass.bus.async_fire(EVENT_CORE_CONFIG_UPDATE, {"time_zone": "America/Chicago"})
+    await hass.async_block_till_done()
+    assert coordinator.clock.is_due(dt_util.utcnow()) is False
 
 
 # ===========================================================================
@@ -128,35 +140,38 @@ def test_sensor_data_flagged_before_controller_notifies(coordinator, controller)
     assert seen == [True]
 
 
-def test_no_fan_data_before_advertisement_or_poll(coordinator):
-    advertise(coordinator, service_info())
+def test_seed_has_no_fan_data(coordinator):
     assert coordinator.has_fan_data is False
 
 
-def test_sensor_advertisement_is_fan_data(coordinator):
+def test_a_reported_fan_level_is_fan_data(coordinator, controller):
+    controller.state = replace(SEED_STATE, fan=0)
+    assert coordinator.has_fan_data is True
+
+
+def test_unparseable_sensor_advertisement_is_ignored(coordinator, controller):
+    controller.set_ble_device_and_advertisement_data.side_effect = ValueError("bad")
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
-    assert coordinator.has_fan_data is True
+    assert coordinator.has_sensor_data is True
 
 
-async def test_successful_poll_is_fan_data(coordinator):
-    await coordinator._async_update()
-    assert coordinator.has_fan_data is True
+def test_name_only_advertisement_is_not_parsed(coordinator, controller):
+    advertise(coordinator, service_info())
+    controller.set_ble_device_and_advertisement_data.assert_not_called()
 
 
-async def test_failed_poll_is_not_fan_data(coordinator, controller):
-    controller.update.side_effect = TimeoutError
-    with pytest.raises(TimeoutError):
-        await coordinator._async_update()
-    assert coordinator.has_fan_data is False
+def test_any_advertisement_makes_the_device_ready(coordinator):
+    advertise(coordinator, service_info())
+    assert coordinator._ready_event.is_set()
 
 
-async def test_listeners_see_fan_data_after_poll(coordinator):
-    """Entities written during the poll still saw the seed, so they must hear again."""
+async def test_listeners_see_reachability_after_poll(coordinator):
+    """Entities written during the poll saw a stale reachability, so they must hear again."""
     seen = []
     with patch.object(
         coordinator,
         "async_update_listeners",
-        MagicMock(side_effect=lambda: seen.append(coordinator.has_fan_data)),
+        MagicMock(side_effect=lambda: seen.append(coordinator.poll_fresh)),
     ):
         await coordinator._async_update()
     assert seen == [True]
@@ -175,11 +190,11 @@ async def test_poll_success_marks_fresh(coordinator, controller):
 async def test_poll_disconnects(coordinator, controller):
     """A held connection stops the sensor data a scan window would bring."""
     await coordinator._async_update()
-    controller.stop.assert_awaited_once()
+    controller.disconnect.assert_awaited_once()
 
 
 async def test_failed_disconnect_still_counts_as_success(coordinator, controller):
-    controller.stop.side_effect = BleakError("gone")
+    controller.disconnect.side_effect = BleakError("gone")
     await coordinator._async_update()
     assert coordinator.poll_fresh is True
 
@@ -188,25 +203,7 @@ async def test_failed_poll_disconnects(coordinator, controller):
     controller.update.side_effect = TimeoutError
     with pytest.raises(TimeoutError):
         await coordinator._async_update()
-    controller.stop.assert_awaited_once()
-    assert coordinator.poll_fresh is False
-
-
-async def test_disconnect_during_poll_counts_as_success(coordinator, controller):
-    controller.update.side_effect = EOFError
-    await coordinator._async_update()
-    assert coordinator.poll_fresh is True
-
-
-async def test_missing_characteristic_clears_cache_and_raises(coordinator, controller):
-    controller.update.side_effect = CharacteristicMissingError("gone")
-    with (
-        patch.object(coordinator, "async_clear_service_cache", AsyncMock()) as clear,
-        pytest.raises(CharacteristicMissingError),
-    ):
-        await coordinator._async_update()
-    clear.assert_awaited_once()
-    controller.stop.assert_awaited_once()
+    controller.disconnect.assert_awaited_once()
     assert coordinator.poll_fresh is False
 
 
@@ -219,31 +216,31 @@ def test_poll_fresh_expires(coordinator):
 # Poll timing
 # ===========================================================================
 async def test_first_tick_polls_once(coordinator, controller):
-    await coordinator._async_poll_tick()
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
+    await coordinator._async_tick()
     controller.update.assert_awaited_once()
 
 
 async def test_no_poll_while_starting(hass, coordinator, controller):
     hass.set_state(CoreState.starting)
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     controller.update.assert_not_awaited()
 
 
 async def test_no_poll_during_active_scan_window(hass, coordinator, controller, window_open):
     window_open.return_value = True
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     controller.update.assert_not_awaited()
     window_open.assert_called_with(hass, ADDRESS)
 
     window_open.return_value = False
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     controller.update.assert_awaited_once()
 
 
 async def test_deferred_poll_is_not_a_failure(coordinator, window_open):
     window_open.return_value = True
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     assert coordinator._polls.failures == 0
     assert coordinator._polls.last_attempt is None
 
@@ -251,13 +248,13 @@ async def test_deferred_poll_is_not_a_failure(coordinator, window_open):
 async def test_stalled_poll_waits_for_window_to_close(coordinator, controller, window_open):
     _stall(coordinator)
     window_open.return_value = True
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     controller.update.assert_not_awaited()
 
 
 async def test_window_not_checked_when_no_poll_is_due(coordinator, window_open):
     _polled(coordinator)
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     window_open.assert_not_called()
 
 
@@ -265,7 +262,7 @@ async def test_no_poll_during_an_operation(coordinator, controller):
     release = asyncio.Event()
     operation = asyncio.ensure_future(coordinator.async_run(release.wait))
     await asyncio.sleep(0)
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     release.set()
     await operation
     controller.update.assert_not_awaited()
@@ -273,14 +270,14 @@ async def test_no_poll_during_an_operation(coordinator, controller):
 
 async def test_no_poll_while_device_is_heard(coordinator, controller):
     _polled(coordinator)
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     controller.update.assert_not_awaited()
 
 
 async def test_sensor_advertisement_postpones_stall_poll(coordinator, controller):
     _stall(coordinator)
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     controller.update.assert_not_awaited()
 
 
@@ -288,14 +285,14 @@ async def test_name_only_advertisement_does_not_postpone_stall_poll(coordinator,
     """While connected the device advertises only its name."""
     _stall(coordinator)
     advertise(coordinator, service_info())
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     controller.update.assert_awaited_once()
 
 
 async def test_polls_once_per_stall(coordinator, controller):
     _stall(coordinator)
-    await coordinator._async_poll_tick()
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
+    await coordinator._async_tick()
     controller.update.assert_awaited_once()
     assert coordinator.poll_fresh is True
 
@@ -303,14 +300,14 @@ async def test_polls_once_per_stall(coordinator, controller):
 async def test_failed_poll_backs_off(coordinator, controller):
     _stall(coordinator)
     controller.update.side_effect = TimeoutError
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     assert controller.update.await_count == 1
 
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     assert controller.update.await_count == 1
 
     coordinator._polls.last_attempt = time.monotonic() - BACKOFF_BASE * 2 - 1
-    await coordinator._async_poll_tick()
+    await coordinator._async_tick()
     assert controller.update.await_count == 2
 
 
@@ -320,6 +317,81 @@ async def test_listeners_reevaluated_while_stalled(coordinator, controller):
     coordinator._polls.failures = 1
     coordinator._polls.last_attempt = time.monotonic()
     with patch.object(coordinator, "async_update_listeners", MagicMock()) as listeners:
-        await coordinator._async_poll_tick()
+        await coordinator._async_tick()
     controller.update.assert_not_awaited()
     listeners.assert_called_once()
+
+
+# ===========================================================================
+# Clock sync timing
+# ===========================================================================
+async def test_due_clock_syncs_on_the_tick(coordinator, controller):
+    _polled(coordinator)
+    coordinator.clock.mark_due()
+    await coordinator._async_tick()
+    controller.set_clock.assert_awaited_once()
+    controller.disconnect.assert_awaited_once()
+    assert coordinator.clock.is_due(dt_util.utcnow()) is False
+
+
+async def test_listeners_hear_each_clock_sync(coordinator):
+    _polled(coordinator)
+    coordinator.clock.mark_due()
+    with patch.object(coordinator, "async_update_listeners", MagicMock()) as listeners:
+        await coordinator._async_tick()
+    listeners.assert_called_once()
+
+
+async def test_first_tick_polls_and_syncs_the_clock(coordinator, controller):
+    coordinator.clock.mark_due()
+    await coordinator._async_tick()
+    controller.update.assert_awaited_once()
+    controller.set_clock.assert_awaited_once()
+
+
+async def test_no_clock_sync_while_starting(hass, coordinator, controller):
+    hass.set_state(CoreState.starting)
+    coordinator.clock.mark_due()
+    await coordinator._async_tick()
+    controller.set_clock.assert_not_awaited()
+
+
+async def test_clock_sync_waits_for_window_to_close(coordinator, controller, window_open):
+    _polled(coordinator)
+    coordinator.clock.mark_due()
+    window_open.return_value = True
+    await coordinator._async_tick()
+    controller.set_clock.assert_not_awaited()
+
+    window_open.return_value = False
+    await coordinator._async_tick()
+    controller.set_clock.assert_awaited_once()
+
+
+async def test_failed_clock_sync_retries_after_backoff(coordinator, controller):
+    _polled(coordinator)
+    coordinator.clock.mark_due()
+    controller.set_clock.side_effect = TimeoutError
+    await coordinator._async_tick()
+    await coordinator._async_tick()
+    assert controller.set_clock.await_count == 1
+    assert coordinator.clock.is_due(dt_util.utcnow() + timedelta(seconds=BACKOFF_BASE * 2))
+
+
+async def test_time_zone_change_makes_the_clock_due(hass, coordinator):
+    with (
+        patch.object(PassiveBluetoothDataUpdateCoordinator, "async_start"),
+        patch.object(coordinator_module.bluetooth, "async_register_callback"),
+        patch.object(coordinator_module, "async_track_time_interval"),
+    ):
+        coordinator.async_start()
+    hass.bus.async_fire(EVENT_CORE_CONFIG_UPDATE, {"time_zone": "America/Chicago"})
+    await hass.async_block_till_done()
+    assert coordinator.clock.is_due(dt_util.utcnow()) is True
+
+
+def test_other_config_changes_leave_the_clock_alone(coordinator):
+    coordinator._async_core_config_updated(
+        Event(EVENT_CORE_CONFIG_UPDATE, {"elevation": 286})
+    )
+    assert coordinator.clock.is_due(dt_util.utcnow()) is False

@@ -4,9 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ac_infinity_ble import ACInfinityController, DeviceInfo
-from ac_infinity_ble.protocol import parse_manufacturer_data
-from ac_infinity_ble.const import MANUFACTURER_ID
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -18,6 +15,12 @@ from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import BLEAK_EXCEPTIONS, DOMAIN
+from .vendor.ac_infinity_ble import (
+    ACInfinityController,
+    DeviceInfo,
+    parse_manufacturer_data,
+)
+from .vendor.ac_infinity_ble.const import MANUFACTURER_ID
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,9 +43,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
         self._discovery_info = discovery_info
-        device: DeviceInfo = parse_manufacturer_data(
-            discovery_info.advertisement.manufacturer_data[MANUFACTURER_ID]
-        )
+        try:
+            device: DeviceInfo = parse_manufacturer_data(
+                discovery_info.advertisement.manufacturer_data[MANUFACTURER_ID]
+            )
+        except ValueError:
+            return self.async_abort(reason="no_devices_found")
         self.context["title_placeholders"] = {"name": device.name}
         return await self.async_step_user()
 
@@ -71,15 +77,16 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 await controller.stop()
+                state = controller.state
                 return self.async_create_entry(
                     title=controller.name,
                     data={
                         CONF_ADDRESS: discovery_info.address,
-                        CONF_SERVICE_DATA: parse_manufacturer_data(
-                            discovery_info.advertisement.manufacturer_data[
-                                MANUFACTURER_ID
-                            ]
-                        ),
+                        CONF_SERVICE_DATA: {
+                            "type": state.type,
+                            "name": state.name,
+                            "version": state.version,
+                        },
                     },
                 )
 
@@ -107,8 +114,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     service_info.advertisement.manufacturer_data[MANUFACTURER_ID]
                 )
                 devices[service_info.address] = f"{device.name} ({service_info.address})"
-            except KeyError:
-                # Discovered device is not an AC Infinity device
+            except (KeyError, ValueError):
+                # Discovered device is not a supported AC Infinity device
                 pass
 
         data_schema = vol.Schema(

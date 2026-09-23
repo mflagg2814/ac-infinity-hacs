@@ -1,22 +1,31 @@
-"""Manifest requirements: Home Assistant must see them as installed, or it reinstalls every boot."""
+"""The library is vendored, so Home Assistant installs nothing for this integration."""
 from __future__ import annotations
 
-from importlib.metadata import distribution
+import ast
 import json
 from pathlib import Path
 
-from homeassistant.util.package import is_installed, parse_requirement_safe
-
-MANIFEST = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
-
-
-def test_requirements_are_recognized_as_installed():
-    for requirement in MANIFEST["requirements"]:
-        assert is_installed(requirement), requirement
+INTEGRATION = Path(__file__).parents[1]
+MANIFEST = json.loads((INTEGRATION / "manifest.json").read_text())
 
 
-def test_pinned_commit_matches_installed_library():
-    (requirement,) = MANIFEST["requirements"]
-    name = parse_requirement_safe(requirement).name
-    commit = json.loads(distribution(name).read_text("direct_url.json"))["vcs_info"]["commit_id"]
-    assert f"@{commit}#" in requirement
+def _absolute_imports(source: str) -> set[str]:
+    imports = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imports.add(node.module)
+    return imports
+
+
+def test_no_requirements():
+    assert MANIFEST["requirements"] == []
+
+
+def test_nothing_imports_the_installed_library():
+    """An old pinned copy may still be installed; only the vendored one is used."""
+    for path in INTEGRATION.glob("**/*.py"):
+        if "vendor" not in path.parts:
+            for module in _absolute_imports(path.read_text()):
+                assert module.split(".")[0] != "ac_infinity_ble", path

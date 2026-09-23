@@ -1,13 +1,37 @@
 {
-    "config": {
-        "abort": {
-            "no_devices_found": "No devices found on the network",
-            "single_instance_allowed": "Already configured. Only a single configuration possible."
-        },
-        "step": {
-            "confirm": {
-                "description": "Do you want to start setup?"
-            }
-        }
+  "config": {
+    "abort": {
+      "no_devices_found": "No devices found on the network",
+      "single_instance_allowed": "Already configured. Only a single configuration possible."
+    },
+    "step": {
+      "confirm": {
+        "description": "Do you want to start setup?"
+      }
     }
+  },
+  "entity": {
+    "fan": {
+      "fan": {
+        "name": "Fan"
+      }
+    },
+    "sensor": {
+      "vpd": {
+        "name": "VPD"
+      },
+      "clock_sync": {
+        "name": "Last Clock Sync",
+        "state": {
+          "confirmed": "Confirmed",
+          "unconfirmed": "Set, not confirmed",
+          "mismatch": "Reads back wrong",
+          "failed": "Failed"
+        }
+      },
+      "clock_drift": {
+        "name": "Last Clock Drift"
+      }
+    }
+  }
 }

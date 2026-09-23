@@ -1,10 +1,12 @@
 """The ac_infinity integration."""
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Mapping
 import logging
+from typing import Any
 
-from ac_infinity_ble import ACInfinityController, DeviceInfo
-from bleak import BleakClient
+from bleak_retry_connector import close_stale_connections_by_address
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
@@ -19,73 +21,80 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .const import DOMAIN
 from .coordinator import ACInfinityDataUpdateCoordinator
 from .models import ACInfinityData
+from .vendor.ac_infinity_ble import ACInfinityController, DeviceInfo
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.FAN]
+STALE_CONNECTION_TIMEOUT = 5
+# A wedged connect can't hold up a reload longer than this.
+STOP_TIMEOUT = 10
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _ensure_get_services_compat() -> None:
-    """Restore BleakClient.get_services() for the ac_infinity_ble library.
-
-    bleak removed the deprecated ``BleakClient.get_services()`` coroutine in
-    favor of the ``BleakClient.services`` property. The ac_infinity_ble library
-    still calls ``await client.get_services()`` in ``Device._ensure_connected``,
-    which raises ``AttributeError`` on current Home Assistant builds and breaks
-    every command (e.g. ``fan.set_percentage``). Re-add a thin async shim that
-    returns the cached services collection so the library works unchanged.
-    """
-    if hasattr(BleakClient, "get_services"):
-        return
-
-    async def get_services(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-        return self.services
-
-    BleakClient.get_services = get_services
+def seed_state(service_data: Mapping[str, Any]) -> DeviceInfo:
+    """The device identity saved at setup; its readings are months old, so they're dropped."""
+    return DeviceInfo(
+        type=service_data["type"],
+        name=service_data["name"],
+        version=service_data["version"],
+    )
 
 
-_ensure_get_services_compat()
+async def _async_close_stale_connections(address: str) -> None:
+    """Close a connection BlueZ still holds from before a restart or reload."""
+    try:
+        async with asyncio.timeout(STALE_CONNECTION_TIMEOUT):
+            await close_stale_connections_by_address(address)
+    except Exception as ex:  # pylint: disable=broad-except
+        _LOGGER.debug("%s: Closing stale connections failed: %s", address, ex)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ac_infinity from a config entry."""
-    address: str = entry.data[CONF_ADDRESS]
-    ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), True)
+    address: str = entry.data[CONF_ADDRESS].upper()
+    ble_device = bluetooth.async_ble_device_from_address(hass, address, True)
     if not ble_device:
         raise ConfigEntryNotReady(
             f"Could not find AC Infinity device with address {address}"
         )
 
-    device_info: DeviceInfo | dict = entry.data[CONF_SERVICE_DATA]
-    if type(device_info) is dict:
-        device_info = DeviceInfo(**entry.data[CONF_SERVICE_DATA])
-    controller = ACInfinityController(ble_device, device_info)
+    await _async_close_stale_connections(address)
+    controller = ACInfinityController(
+        ble_device,
+        seed_state(entry.data[CONF_SERVICE_DATA]),
+        ble_device_provider=lambda: bluetooth.async_ble_device_from_address(
+            hass, address, True
+        ),
+    )
     coordinator = ACInfinityDataUpdateCoordinator(hass, _LOGGER, ble_device, controller)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityData(
-        entry.title, controller, coordinator
+        controller, coordinator
     )
 
     entry.async_on_unload(coordinator.async_start())
     if not await coordinator.async_wait_ready():
+        await _async_stop(controller)
         raise ConfigEntryNotReady(f"{address} is not advertising state")
 
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update."""
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
-    if entry.title != data.title:
-        await hass.config_entries.async_reload(entry.entry_id)
-
-
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        data: ACInfinityData = hass.data[DOMAIN].pop(entry.entry_id)
+        await _async_stop(data.device)
 
     return unload_ok
+
+
+async def _async_stop(controller: ACInfinityController) -> None:
+    """Disconnect for good; a command still in flight ends without reconnecting."""
+    try:
+        async with asyncio.timeout(STOP_TIMEOUT):
+            await controller.stop()
+    except TimeoutError:
+        _LOGGER.warning("%s: Gave up waiting for an operation to stop", controller.name)

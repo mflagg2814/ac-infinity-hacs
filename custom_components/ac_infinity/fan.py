@@ -6,8 +6,6 @@ from functools import partial
 import math
 from typing import Any
 
-from ac_infinity_ble import ACInfinityController
-
 from homeassistant.components.fan import FanEntity, FanEntityFeature
 
 from homeassistant.components.bluetooth.passive_update_coordinator import (
@@ -15,8 +13,6 @@ from homeassistant.components.bluetooth.passive_update_coordinator import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.percentage import (
     int_states_in_range,
@@ -24,9 +20,11 @@ from homeassistant.util.percentage import (
     percentage_to_ranged_value,
 )
 
-from .const import DEVICE_MODEL, DOMAIN
+from .const import DOMAIN
 from .coordinator import ACInfinityDataUpdateCoordinator
+from .entity import device_info
 from .models import ACInfinityData
+from .vendor.ac_infinity_ble import ACInfinityController
 
 SPEED_RANGE = (1, 10)
 
@@ -45,7 +43,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the light platform for LEDBLE."""
     data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ACInfinityFan(data.coordinator, data.device, entry.title)])
+    async_add_entities([ACInfinityFan(data.coordinator, data.device)])
 
 
 class ACInfinityFan(
@@ -53,6 +51,8 @@ class ACInfinityFan(
 ):
     """Representation of AC Infinity sensor."""
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "fan"
     _attr_speed_count = int_states_in_range(SPEED_RANGE)
     _attr_supported_features = FanEntityFeature.SET_SPEED
 
@@ -60,20 +60,12 @@ class ACInfinityFan(
         self,
         coordinator: ACInfinityDataUpdateCoordinator,
         device: ACInfinityController,
-        name: str,
     ) -> None:
         """Initialize an AC Infinity sensor."""
         super().__init__(coordinator)
         self._device = device
-        self._attr_name = f"{name} Fan"
         self._attr_unique_id = f"{self._device.address}_fan"
-        self._attr_device_info = DeviceInfo(
-            name=device.name,
-            model=DEVICE_MODEL[device.state.type],
-            manufacturer="AC Infinity",
-            sw_version=str(device.state.version),
-            connections={(dr.CONNECTION_BLUETOOTH, device.address)},
-        )
+        self._attr_device_info = device_info(device)
         self._async_update_attrs()
 
     @property
@@ -109,9 +101,10 @@ class ACInfinityFan(
     @callback
     def _async_update_attrs(self) -> None:
         """Handle updating _attr values."""
+        level = self._device.state.fan
         self._attr_is_on = self._device.is_on
-        self._attr_percentage = ranged_value_to_percentage(
-            SPEED_RANGE, self._device.state.fan
+        self._attr_percentage = (
+            None if level is None else ranged_value_to_percentage(SPEED_RANGE, level)
         )
 
     @callback

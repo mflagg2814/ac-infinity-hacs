@@ -1,13 +1,12 @@
 """PollSchedule: first poll, stall detection, and backoff."""
 from __future__ import annotations
 
-from custom_components.ac_infinity.polling import (
+from custom_components.ac_infinity.backoff import (
     BACKOFF_BASE,
     MAX_BACKOFF,
     MAX_BACKOFF_EXPONENT,
-    STALL_AFTER,
-    PollSchedule,
 )
+from custom_components.ac_infinity.polling import STALL_AFTER, PollSchedule
 
 
 def test_first_poll_is_due_immediately():

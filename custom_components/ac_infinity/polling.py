@@ -3,11 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .backoff import backoff_delay, count_failure
+
 # Seconds without sensor advertisements or a successful poll; spans many scan windows
 STALL_AFTER = 900
-BACKOFF_BASE = 120  # seconds
-MAX_BACKOFF = 1800  # seconds
-MAX_BACKOFF_EXPONENT = 6
 
 
 @dataclass
@@ -32,7 +31,7 @@ class PollSchedule:
 
     @property
     def backoff(self) -> float:
-        return min(BACKOFF_BASE * 2**self.failures, MAX_BACKOFF)
+        return backoff_delay(self.failures)
 
     def mark_heard(self, now: float) -> None:
         self.last_heard = now
@@ -46,4 +45,4 @@ class PollSchedule:
         self.failures = 0
 
     def mark_failure(self) -> None:
-        self.failures = min(self.failures + 1, MAX_BACKOFF_EXPONENT)
+        self.failures = count_failure(self.failures)

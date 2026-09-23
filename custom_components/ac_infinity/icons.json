@@ -1,0 +1,18 @@
+{
+  "entity": {
+    "sensor": {
+      "clock_sync": {
+        "default": "mdi:clock",
+        "state": {
+          "confirmed": "mdi:clock-check",
+          "unconfirmed": "mdi:clock-edit",
+          "mismatch": "mdi:clock-alert",
+          "failed": "mdi:clock-remove"
+        }
+      },
+      "clock_drift": {
+        "default": "mdi:clock-fast"
+      }
+    }
+  }
+}
