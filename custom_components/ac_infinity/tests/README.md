@@ -1,37 +1,42 @@
 # AC Infinity — test suite
 
-Covers the whole integration: the bluetooth discovery and user config flow steps,
-setup and unload, the coordinator's scan-window, poll and clock-sync timing rules,
-sensor and fan availability, and our additions to the vendored library.
+Covers the whole integration and the vendored library: the bluetooth discovery and
+user config flow steps, setup and unload, the coordinator's scan-window, poll and
+clock-sync timing rules, sensor and fan availability, and the library itself.
 
 ## Running
 
 Setup and how to run these are shared with every other suite in this config — see
-[`custom_components/tests/README.md`](../../tests/README.md). Coverage leaves out the
-vendored library (`.coveragerc`).
+[`custom_components/tests/README.md`](../../tests/README.md). Coverage, with branches,
+includes the vendored library (`.coveragerc`) and is at 100%.
 
 ## Layout
 
 | File                        | Scope                                                                              |
 | ---------------------------- | ----------------------------------------------------------------------------------- |
-| `conftest.py`                | An unstarted coordinator with a mock controller, a real controller on the setup seed, frames captured from the A-0ECGN, `reply`/`ack` frame builders, `service_info`, `advertise` |
-| `test_config_flow.py`        | Bluetooth discovery, the device list, and creating or re-showing the form on connection errors |
-| `test_init.py`               | Setup seeding, stale-connection cleanup, unload and its time limit, the options-reload listener |
+| `conftest.py`                | Unstarted coordinators on a mock or a real seeded controller, the loaded platforms (`loaded_entry`), `make_entry`, `patched_setup`, frames captured from the A-0ECGN, `reply`/`ack` frame builders, `service_info`, `advertise` |
+| `test_config_flow.py`        | Bluetooth discovery and its confirmation, the device list, and creating or re-showing the form on connection errors |
+| `test_init.py`               | Setup seeding, the per-connect device lookup, stale-connection cleanup, unload and its time limit |
 | `test_polling.py`            | `PollSchedule`: first poll, stall boundary, backoff growth and cap, reset on success (pure) |
 | `test_clock_schedule.py`     | `ClockSchedule` and UTC offset change detection, including 30-minute DST (pure)   |
 | `test_clock_sync.py`         | Setting the clock, reading it back, status, drift, logging, and scheduling the next sync |
 | `test_scan_window.py`        | Active scan window detection, and the HA scanner attributes it relies on           |
 | `test_connection_rules.py`   | Connecting controller methods run only inside operations passed to `async_run`   |
-| `test_coordinator.py`        | Scan-window request, sensor-payload detection, polls and disconnects, poll and clock timing around scan windows, availability |
+| `test_coordinator.py`        | Scan-window request, sensor-payload detection, controller callbacks, polls and disconnects, poll and clock timing around scan windows, startup readiness |
 | `test_fan.py`                | Unavailable until the device reports its level; commands show the acknowledged state, send mode-only OFF, and release the connection |
-| `test_sensor.py`             | Sensors stay unavailable on the setup seed until a sensor advertisement arrives; clock diagnostics, their translations and icons |
+| `test_sensor.py`             | Which sensors a model gets; sensors stay unavailable on the setup seed until a sensor advertisement arrives; bands; clock diagnostics, their translations and icons |
+| `test_state_writes.py`       | A sensor advertisement writes each entity's state once |
 | `test_vendor.py`             | Clock encoding, `set_clock`/`read_clock`/`disconnect`, connecting and cache recovery, response assembly, and the captured settings reply |
 | `test_manifest.py`           | No requirements, and nothing imports an installed copy of the library |
+| `vendor/upstream/`           | Upstream's own suite at the vendored commit, imports rewritten to the vendored copy; ruff ignores its docstring and private-access rules |
+| `vendor/test_untested_paths.py` | Library paths upstream's suite leaves untested |
 
 ## Notes on the harness
 
-- The coordinator, fan, sensor and vendor suites drive and inspect private state, so
-  they suppress ruff's `SLF001` file-wide.
+- The coordinator, fan, sensor, state-write and vendor suites drive and inspect private
+  state, so they suppress ruff's `SLF001` file-wide.
+- `vendor/conftest.py` overrides the autouse fixture that starts Home Assistant; the
+  library tests don't need it.
 - phacc doesn't ship Home Assistant's Bluetooth injection helpers, so the coordinator
   is built directly and never started. Advertisements are delivered by calling
   `_async_handle_bluetooth_event` with the base class handler patched out.

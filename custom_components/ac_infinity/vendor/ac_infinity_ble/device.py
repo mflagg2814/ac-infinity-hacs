@@ -461,7 +461,7 @@ class ACInfinityController:
                 return
 
         if self._notify_future and not self._notify_future.done():
-            if data[:2] == b"\x1e\xff":
+            if data[:2] == b"\x1e\xff":  # pragma: no cover - telemetry headers return above
                 return
             try:
                 packet = self._assemble_response(data)

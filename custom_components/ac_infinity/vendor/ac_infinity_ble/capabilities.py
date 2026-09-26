@@ -8,6 +8,7 @@ SENSOR_TYPES = frozenset({3, 4, 5, 14, 15, 24, 25, 34, 35})
 H_TYPES = frozenset({19, 20, 21, 22, 26, 27, 51})
 HOME_TYPES = frozenset({33, 39, 40, 48, 49, 50})
 MULTIPORT_TYPES = frozenset({7, 8, 9, 11, 12, 16, 17, 18, 23} | H_TYPES | HOME_TYPES)
+VPD_TYPES = frozenset({7, 9, 11, 12})
 MODEL_NAMES = {
     1: "Controller 67",
     2: "Controller 76",
@@ -75,6 +76,11 @@ MODEL_NUMBERS = {
 def is_h4(device_type: int, version: int) -> bool:
     """Whether the model speaks the extended H4 protocol."""
     return device_type == 51 or (device_type in H_TYPES and version >= 20)
+
+
+def has_vpd_sensor(device_type: int, version: int) -> bool:
+    """Whether the model reports a VPD reading worth its own sensor."""
+    return device_type in VPD_TYPES and version >= 3
 
 
 def family(device_type: int) -> str:

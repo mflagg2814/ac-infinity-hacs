@@ -10,8 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 from bleak.exc import BleakError
 import pytest
 
-from custom_components.ac_infinity.fan import ACInfinityFan
+from custom_components.ac_infinity.fan import FAN, ACInfinityFan
 from custom_components.ac_infinity.vendor.ac_infinity_ble.const import MANUFACTURER_ID
+from homeassistant.components.bluetooth import BluetoothChange
 
 from .conftest import MODEL_REPLY, SEED_STATE, SENSOR_PAYLOAD, ack, advertise, service_info
 
@@ -26,9 +27,9 @@ def controller(seeded_device):
 
 
 @pytest.fixture
-def fan(coordinator, controller):
+def fan(coordinator):
     """A fan entity that doesn't write state."""
-    entity = ACInfinityFan(coordinator, controller)
+    entity = ACInfinityFan(coordinator, FAN)
     entity.async_write_ha_state = MagicMock()
     return entity
 
@@ -104,7 +105,7 @@ def test_available_after_sensor_advertisement(coordinator, fan):
 async def test_poll_alone_leaves_the_level_unknown(coordinator, controller, fan):
     """Saved levels aren't the actual output; only an advertisement or a command reports it."""
     controller._send_command.side_effect = lambda _request: MODEL_REPLY
-    await coordinator._async_update()
+    await coordinator._async_attempt_poll(time.monotonic())
     assert (controller.is_on, controller.state.level_on) == (True, 8)
     assert fan.available is False
 
@@ -113,5 +114,24 @@ def test_unavailable_when_unreachable_after_real_data(coordinator, fan):
     """Unavailable when unreachable after real data."""
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     coordinator._available = False
-    coordinator._last_poll_ok = time.monotonic() - 10**6
+    coordinator._polls.last_success = time.monotonic() - 10**6
     assert fan.available is False
+
+
+# ===========================================================================
+# Services
+# ===========================================================================
+@pytest.mark.parametrize(("service", "state"), [("turn_on", "on"), ("turn_off", "off")])
+async def test_turn_on_and_off_services_are_supported(hass, loaded_entry, service, state):
+    """HA rejects fan.turn_on and fan.turn_off for fans that don't declare them."""
+    coordinator = loaded_entry.runtime_data
+    controller = coordinator.controller
+    controller._state = replace(controller.state, level_on=5, level_off=0)
+    controller._send_command = AsyncMock(side_effect=ack)
+    controller.disconnect = AsyncMock()
+    coordinator._async_handle_bluetooth_event(
+        service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}), BluetoothChange.ADVERTISEMENT
+    )
+
+    await hass.services.async_call("fan", service, {"entity_id": "fan.blowymatron_fan"}, blocking=True)
+    assert hass.states.get("fan.blowymatron_fan").state == state

@@ -1,22 +1,19 @@
 """The ac_infinity integration."""
 
 import asyncio
-from collections.abc import Mapping
 import logging
-from typing import Any
 
+from bleak.backends.device import BLEDevice
 from bleak_retry_connector import close_stale_connections_by_address
 
 from homeassistant.components import bluetooth
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
-from .coordinator import ACInfinityDataUpdateCoordinator
-from .models import ACInfinityData
-from .vendor.ac_infinity_ble import ACInfinityController, DeviceInfo
+from .coordinator import ACInfinityConfigEntry, ACInfinityDataUpdateCoordinator
+from .identity import seed_state
+from .vendor.ac_infinity_ble import ACInfinityController
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.FAN]
 STALE_CONNECTION_TIMEOUT = 5
@@ -24,15 +21,6 @@ STALE_CONNECTION_TIMEOUT = 5
 STOP_TIMEOUT = 10
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def seed_state(service_data: Mapping[str, Any]) -> DeviceInfo:
-    """The device identity saved at setup; its readings are months old, so they're dropped."""
-    return DeviceInfo(
-        type=service_data["type"],
-        name=service_data["name"],
-        version=service_data["version"],
-    )
 
 
 async def _async_close_stale_connections(address: str) -> None:
@@ -44,38 +32,39 @@ async def _async_close_stale_connections(address: str) -> None:
         _LOGGER.debug("%s: Closing stale connections failed: %s", address, ex)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: ACInfinityConfigEntry) -> bool:
     """Set up ac_infinity from a config entry."""
     address: str = entry.data[CONF_ADDRESS].upper()
-    ble_device = bluetooth.async_ble_device_from_address(hass, address, True)
-    if not ble_device:
+
+    def connectable_device() -> BLEDevice | None:
+        return bluetooth.async_ble_device_from_address(hass, address, connectable=True)
+
+    if not (ble_device := connectable_device()):
         raise ConfigEntryNotReady(f"Could not find AC Infinity device with address {address}")
 
     await _async_close_stale_connections(address)
     controller = ACInfinityController(
         ble_device,
         seed_state(entry.data[CONF_SERVICE_DATA]),
-        ble_device_provider=lambda: bluetooth.async_ble_device_from_address(hass, address, True),
+        ble_device_provider=connectable_device,
     )
-    coordinator = ACInfinityDataUpdateCoordinator(hass, _LOGGER, ble_device, controller)
-
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityData(controller, coordinator)
+    coordinator = ACInfinityDataUpdateCoordinator(hass, controller)
 
     entry.async_on_unload(coordinator.async_start())
     if not await coordinator.async_wait_ready():
         await _async_stop(controller)
         raise ConfigEntryNotReady(f"{address} is not advertising state")
 
+    entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: ACInfinityConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        data: ACInfinityData = hass.data[DOMAIN].pop(entry.entry_id)
-        await _async_stop(data.device)
+        await _async_stop(entry.runtime_data.controller)
 
     return unload_ok
 

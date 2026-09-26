@@ -4,23 +4,12 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 import custom_components.ac_infinity as integration
 from custom_components.ac_infinity import async_setup_entry, async_unload_entry
-from custom_components.ac_infinity.const import DOMAIN
-from custom_components.ac_infinity.models import ACInfinityData
-from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .conftest import ADDRESS, SEED_STATE, SETUP_SEED
-
-
-def _entry(hass, **data_overrides):
-    data = {CONF_ADDRESS: ADDRESS, CONF_SERVICE_DATA: SETUP_SEED, **data_overrides}
-    entry = MockConfigEntry(domain=DOMAIN, data=data)
-    entry.add_to_hass(hass)
-    return entry
+from .conftest import ADDRESS, SEED_STATE, make_entry, patched_setup
 
 
 @pytest.fixture
@@ -37,30 +26,10 @@ async def _hang(*_args) -> None:
 
 
 @pytest.fixture(autouse=True)
-def close_stale():
-    """Skip closing stale BlueZ connections."""
-    with patch.object(integration, "close_stale_connections_by_address", AsyncMock()) as mock:
-        yield mock
-
-
-@pytest.fixture(autouse=True)
 def platform_setup(hass):
     """Skip forwarding to the real sensor/fan platforms."""
     with patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()) as mock:
         yield mock
-
-
-def _patch_setup(coordinator_instance, *, ble_device=True):
-    return (
-        patch(
-            "custom_components.ac_infinity.bluetooth.async_ble_device_from_address",
-            return_value=MagicMock() if ble_device else None,
-        ),
-        patch(
-            "custom_components.ac_infinity.ACInfinityDataUpdateCoordinator",
-            return_value=coordinator_instance,
-        ),
-    )
 
 
 # ===========================================================================
@@ -68,103 +37,101 @@ def _patch_setup(coordinator_instance, *, ble_device=True):
 # ===========================================================================
 async def test_setup_fails_fast_when_device_not_found(hass, coordinator_instance):
     """Setup fails fast when device not found."""
-    entry = _entry(hass)
-    patch_ble, patch_coordinator = _patch_setup(coordinator_instance, ble_device=False)
-    with patch_ble, patch_coordinator, pytest.raises(ConfigEntryNotReady):
+    entry = make_entry(hass)
+    with patched_setup(coordinator_instance, ble_device=False), pytest.raises(ConfigEntryNotReady):
         await async_setup_entry(hass, entry)
 
 
 async def test_setup_fails_when_device_never_becomes_ready(hass, coordinator_instance):
     """Setup fails when device never becomes ready."""
-    entry = _entry(hass)
+    entry = make_entry(hass)
     coordinator_instance.async_wait_ready = AsyncMock(return_value=False)
     controller = MagicMock(stop=AsyncMock())
-    patch_ble, patch_coordinator = _patch_setup(coordinator_instance)
-    with (
-        patch_ble,
-        patch_coordinator,
-        patch.object(integration, "ACInfinityController", return_value=controller),
-        pytest.raises(ConfigEntryNotReady),
-    ):
+    with patched_setup(coordinator_instance, controller), pytest.raises(ConfigEntryNotReady):
         await async_setup_entry(hass, entry)
     controller.stop.assert_awaited_once()
 
 
 async def test_setup_seeds_only_the_identity(hass, coordinator_instance):
     """The saved readings are months old."""
-    entry = _entry(hass)
-    patch_ble, patch_coordinator = _patch_setup(coordinator_instance)
-    with patch_ble, patch_coordinator, patch.object(integration, "ACInfinityController") as make_controller:
+    entry = make_entry(hass)
+    with patched_setup(coordinator_instance) as patches:
         await async_setup_entry(hass, entry)
 
-    (_ble_device, state), kwargs = make_controller.call_args
+    (_ble_device, state), kwargs = patches.make_controller.call_args
     assert state == SEED_STATE
     assert callable(kwargs["ble_device_provider"])
 
 
-async def test_setup_closes_stale_connections(hass, coordinator_instance, close_stale):
-    """Setup closes stale connections."""
-    entry = _entry(hass)
-    patch_ble, patch_coordinator = _patch_setup(coordinator_instance)
-    with patch_ble, patch_coordinator:
+async def test_the_controller_looks_up_the_device_on_each_connect(hass, coordinator_instance):
+    """The controller asks for the current connectable device, not the one seen at setup."""
+    entry = make_entry(hass)
+    with patched_setup(coordinator_instance) as patches:
         await async_setup_entry(hass, entry)
-    close_stale.assert_awaited_once_with(ADDRESS)
+    provider = patches.make_controller.call_args.kwargs["ble_device_provider"]
+
+    current = MagicMock()
+    with patch.object(integration.bluetooth, "async_ble_device_from_address", return_value=current) as lookup:
+        assert provider() is current
+    lookup.assert_called_once_with(hass, ADDRESS, connectable=True)
+
+
+async def test_setup_closes_stale_connections(hass, coordinator_instance):
+    """Setup closes stale connections."""
+    entry = make_entry(hass)
+    with patched_setup(coordinator_instance) as patches:
+        await async_setup_entry(hass, entry)
+    patches.close_stale.assert_awaited_once_with(ADDRESS)
 
 
 @pytest.mark.parametrize("error", [RuntimeError("no BlueZ"), TimeoutError])
-async def test_setup_survives_failing_stale_connection_cleanup(hass, coordinator_instance, close_stale, error):
+async def test_setup_survives_failing_stale_connection_cleanup(hass, coordinator_instance, error):
     """Setup survives failing stale connection cleanup."""
-    close_stale.side_effect = error
-    entry = _entry(hass)
-    patch_ble, patch_coordinator = _patch_setup(coordinator_instance)
-    with patch_ble, patch_coordinator:
+    entry = make_entry(hass)
+    with patched_setup(coordinator_instance) as patches:
+        patches.close_stale.side_effect = error
         assert await async_setup_entry(hass, entry) is True
 
 
-async def test_stale_connection_cleanup_is_time_limited(hass, coordinator_instance, close_stale):
+async def test_stale_connection_cleanup_is_time_limited(hass, coordinator_instance):
     """Stale connection cleanup is time limited."""
-    close_stale.side_effect = _hang
-    entry = _entry(hass)
-    patch_ble, patch_coordinator = _patch_setup(coordinator_instance)
-    with (
-        patch_ble,
-        patch_coordinator,
-        patch.object(integration, "STALE_CONNECTION_TIMEOUT", 0.01),
-    ):
+    entry = make_entry(hass)
+    with patched_setup(coordinator_instance) as patches, patch.object(integration, "STALE_CONNECTION_TIMEOUT", 0.01):
+        patches.close_stale.side_effect = _hang
         assert await async_setup_entry(hass, entry) is True
 
 
-async def test_setup_stores_data_and_forwards_platforms(hass, coordinator_instance, platform_setup):
-    """Setup stores data and forwards platforms."""
-    entry = _entry(hass)
-    patch_ble, patch_coordinator = _patch_setup(coordinator_instance)
-    with patch_ble, patch_coordinator:
+async def test_setup_stores_the_coordinator_and_forwards_platforms(hass, coordinator_instance, platform_setup):
+    """Setup stores the coordinator and forwards platforms."""
+    entry = make_entry(hass)
+    with patched_setup(coordinator_instance):
         assert await async_setup_entry(hass, entry) is True
 
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
-    assert data.coordinator is coordinator_instance
+    assert entry.runtime_data is coordinator_instance
     platform_setup.assert_awaited_once()
 
 
 # ===========================================================================
 # async_unload_entry
 # ===========================================================================
-async def test_unload_pops_data_and_stops_the_controller(hass):
-    """Unload pops data and stops the controller."""
-    entry = _entry(hass)
+def _loaded(hass, controller):
+    entry = make_entry(hass)
+    entry.runtime_data = MagicMock(controller=controller)
+    return entry
+
+
+async def test_unload_stops_the_controller(hass):
+    """Unload stops the controller."""
     controller = MagicMock(stop=AsyncMock())
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityData(controller, MagicMock())
+    entry = _loaded(hass, controller)
     with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)):
         assert await async_unload_entry(hass, entry) is True
-    assert entry.entry_id not in hass.data[DOMAIN]
     controller.stop.assert_awaited_once()
 
 
 async def test_unload_gives_up_on_a_wedged_stop(hass):
     """Unload gives up on a wedged stop."""
-    entry = _entry(hass)
-    controller = MagicMock(stop=AsyncMock(side_effect=_hang))
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityData(controller, MagicMock())
+    entry = _loaded(hass, MagicMock(stop=AsyncMock(side_effect=_hang)))
     with (
         patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)),
         patch.object(integration, "STOP_TIMEOUT", 0.01),
@@ -172,10 +139,10 @@ async def test_unload_gives_up_on_a_wedged_stop(hass):
         assert await async_unload_entry(hass, entry) is True
 
 
-async def test_unload_keeps_data_on_failure(hass):
-    """Unload keeps data on failure."""
-    entry = _entry(hass)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityData(MagicMock(), MagicMock())
+async def test_failed_unload_leaves_the_controller_running(hass):
+    """Failed unload leaves the controller running."""
+    controller = MagicMock(stop=AsyncMock())
+    entry = _loaded(hass, controller)
     with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=False)):
         assert await async_unload_entry(hass, entry) is False
-    assert entry.entry_id in hass.data[DOMAIN]
+    controller.stop.assert_not_awaited()

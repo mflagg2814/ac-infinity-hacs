@@ -5,20 +5,16 @@ from functools import partial
 import math
 from typing import Any
 
-from homeassistant.components.bluetooth.passive_update_coordinator import PassiveBluetoothCoordinatorEntity
-from homeassistant.components.fan import FanEntity, FanEntityFeature
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.fan import FanEntity, FanEntityDescription, FanEntityFeature
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util.percentage import int_states_in_range, percentage_to_ranged_value, ranged_value_to_percentage
 
-from .const import DOMAIN
-from .coordinator import ACInfinityDataUpdateCoordinator
-from .entity import device_info
-from .models import ACInfinityData
-from .vendor.ac_infinity_ble import ACInfinityController
+from .coordinator import ACInfinityConfigEntry
+from .entity import ACInfinityEntity
 
 SPEED_RANGE = (1, 10)
+FAN = FanEntityDescription(key="fan", translation_key="fan")
 
 
 def _speed_level(percentage: int) -> int:
@@ -30,33 +26,18 @@ def _speed_level(percentage: int) -> int:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: ACInfinityConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the fan platform."""
-    data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ACInfinityFan(data.coordinator, data.device)])
+    async_add_entities([ACInfinityFan(entry.runtime_data, FAN)])
 
 
-class ACInfinityFan(PassiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], FanEntity):
+class ACInfinityFan(ACInfinityEntity, FanEntity):
     """The controller's fan output."""
 
-    _attr_has_entity_name = True
-    _attr_translation_key = "fan"
     _attr_speed_count = int_states_in_range(SPEED_RANGE)
-    _attr_supported_features = FanEntityFeature.SET_SPEED
-
-    def __init__(
-        self,
-        coordinator: ACInfinityDataUpdateCoordinator,
-        device: ACInfinityController,
-    ) -> None:
-        """Initialize the fan."""
-        super().__init__(coordinator)
-        self._device = device
-        self._attr_unique_id = f"{self._device.address}_fan"
-        self._attr_device_info = device_info(device)
-        self._async_update_attrs()
+    _attr_supported_features = FanEntityFeature.SET_SPEED | FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
 
     @property
     def available(self) -> bool:
@@ -90,18 +71,7 @@ class ACInfinityFan(PassiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordi
 
     @callback
     def _async_update_attrs(self) -> None:
-        """Handle updating _attr values."""
+        """Take the output's state and level."""
         level = self._device.state.fan
         self._attr_is_on = self._device.is_on
         self._attr_percentage = None if level is None else ranged_value_to_percentage(SPEED_RANGE, level)
-
-    @callback
-    def _handle_coordinator_update(self, *args: Any) -> None:
-        """Handle data update."""
-        self._async_update_attrs()
-        self.async_write_ha_state()
-
-    async def async_added_to_hass(self) -> None:
-        """Register callbacks."""
-        self.async_on_remove(self._device.register_callback(self._handle_coordinator_update))
-        return await super().async_added_to_hass()

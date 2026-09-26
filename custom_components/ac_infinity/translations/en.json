@@ -1,13 +1,25 @@
 {
   "config": {
-    "abort": {
-      "no_devices_found": "No devices found on the network",
-      "single_instance_allowed": "Already configured. Only a single configuration possible."
-    },
+    "flow_title": "{name}",
     "step": {
-      "confirm": {
-        "description": "Do you want to start setup?"
+      "user": {
+        "description": "Choose a device to set up",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "bluetooth_confirm": {
+        "description": "Do you want to set up {name}?"
       }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "already_in_progress": "This is already being configured. Finish the existing configuration before starting again.",
+      "no_devices_found": "No devices found on the network"
     }
   },
   "entity": {

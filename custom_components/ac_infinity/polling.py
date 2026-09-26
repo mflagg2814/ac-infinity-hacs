@@ -6,6 +6,8 @@ from .backoff import backoff_delay, count_failure
 
 # Seconds without sensor advertisements or a successful poll; spans many scan windows
 STALL_AFTER = 900
+# Entities stay available this long after a successful poll, without advertisements.
+POLL_AVAILABLE_WINDOW = STALL_AFTER + 300
 
 
 @dataclass
@@ -13,7 +15,7 @@ class PollSchedule:
     """One poll after startup, then only while sensor data has stalled; monotonic seconds."""
 
     last_heard: float
-    polled: bool = False
+    last_success: float | None = None
     failures: int = 0
     last_attempt: float | None = None
 
@@ -21,9 +23,13 @@ class PollSchedule:
         """Whether nothing has been heard from the device for STALL_AFTER."""
         return now - self.last_heard >= STALL_AFTER
 
+    def is_fresh(self, now: float) -> bool:
+        """Whether a poll succeeded recently enough to trust the device."""
+        return self.last_success is not None and now - self.last_success < POLL_AVAILABLE_WINDOW
+
     def is_due(self, now: float) -> bool:
         """Never polled or stalled, and any backoff from failed polls has elapsed."""
-        if self.polled and not self.is_stalled(now):
+        if self.last_success is not None and not self.is_stalled(now):
             return False
         if self.failures and self.last_attempt is not None:
             return now - self.last_attempt >= self.backoff
@@ -44,7 +50,7 @@ class PollSchedule:
 
     def mark_success(self, now: float) -> None:
         """Record a poll succeeding."""
-        self.polled = True
+        self.last_success = now
         self.last_heard = now
         self.failures = 0
 

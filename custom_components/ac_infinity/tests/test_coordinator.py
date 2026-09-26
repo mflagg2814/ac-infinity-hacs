@@ -7,7 +7,7 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, timedelta
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from bleak.exc import BleakError
 import pytest
@@ -16,8 +16,9 @@ from custom_components.ac_infinity import coordinator as coordinator_module
 from custom_components.ac_infinity.backoff import BACKOFF_BASE
 from custom_components.ac_infinity.coordinator import ACTIVE_SCAN_INTERVAL, carries_sensor_data
 from custom_components.ac_infinity.polling import STALL_AFTER
+from custom_components.ac_infinity.vendor.ac_infinity_ble import CallbackType
 from custom_components.ac_infinity.vendor.ac_infinity_ble.const import MANUFACTURER_ID
-from homeassistant.components.bluetooth import BluetoothCallbackReplay, BluetoothScanningMode
+from homeassistant.components.bluetooth import BluetoothCallbackReplay, BluetoothChange, BluetoothScanningMode
 from homeassistant.components.bluetooth.passive_update_coordinator import PassiveBluetoothDataUpdateCoordinator
 from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import CoreState, Event
@@ -41,6 +42,10 @@ def clock_synced(coordinator):
 
 def _polled(coordinator) -> None:
     coordinator._polls.mark_success(time.monotonic())
+
+
+async def _poll(coordinator) -> None:
+    await coordinator._async_attempt_poll(time.monotonic())
 
 
 def _stall(coordinator) -> None:
@@ -98,9 +103,9 @@ def test_own_registration_adds_no_default_windows(coordinator):
     assert register.call_args.args[3] is BluetoothScanningMode.PASSIVE
 
 
-async def test_stop_cancels_everything(hass, coordinator):
+async def test_stop_cancels_everything(hass, coordinator, controller):
     """Stop cancels everything."""
-    cancels = [MagicMock(), MagicMock(), MagicMock()]
+    cancels = [MagicMock(), MagicMock(), MagicMock(), controller.register_callback.return_value]
     with (
         patch.object(PassiveBluetoothDataUpdateCoordinator, "async_start", return_value=cancels[0]),
         patch.object(coordinator_module.bluetooth, "async_register_callback", return_value=cancels[1]),
@@ -134,14 +139,6 @@ def test_sensor_advertisement_is_sensor_data(coordinator):
     assert coordinator.has_sensor_data is True
 
 
-def test_sensor_data_flagged_before_controller_notifies(coordinator, controller):
-    """Entities write their state from the controller's callbacks."""
-    seen = []
-    controller.set_ble_device_and_advertisement_data.side_effect = lambda *_: seen.append(coordinator.has_sensor_data)
-    advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
-    assert seen == [True]
-
-
 def test_seed_has_no_fan_data(coordinator):
     """Seed has no fan data."""
     assert coordinator.has_fan_data is False
@@ -173,54 +170,93 @@ def test_any_advertisement_makes_the_device_ready(coordinator):
 
 
 async def test_listeners_see_reachability_after_poll(coordinator):
-    """Entities written during the poll saw a stale reachability, so they must hear again."""
+    """Listeners hear once, after the poll made the device reachable."""
     seen = []
     with patch.object(
         coordinator,
         "async_update_listeners",
-        MagicMock(side_effect=lambda: seen.append(coordinator.poll_fresh)),
+        MagicMock(side_effect=lambda: seen.append(coordinator.reachable)),
     ):
-        await coordinator._async_update()
+        await _poll(coordinator)
     assert seen == [True]
+
+
+# ===========================================================================
+# Controller callbacks
+# ===========================================================================
+def _controller_callback(coordinator, controller):
+    with (
+        patch.object(PassiveBluetoothDataUpdateCoordinator, "async_start"),
+        patch.object(coordinator_module.bluetooth, "async_register_callback"),
+        patch.object(coordinator_module, "async_track_time_interval"),
+    ):
+        coordinator.async_start()
+    return controller.register_callback.call_args.args[0]
+
+
+def test_telemetry_updates_listeners(coordinator, controller):
+    """Telemetry arrives only while connected, so nothing else would pass it on."""
+    handle = _controller_callback(coordinator, controller)
+    with patch.object(coordinator, "async_update_listeners") as listeners:
+        handle(SEED_STATE, CallbackType.NOTIFICATION)
+    listeners.assert_called_once()
+
+
+@pytest.mark.parametrize("kind", [CallbackType.ADVERTISEMENT, CallbackType.UPDATE_RESPONSE])
+def test_callbacks_already_covered_leave_listeners_alone(coordinator, controller, kind):
+    """The advertisement handler, polls and commands each update listeners once themselves."""
+    handle = _controller_callback(coordinator, controller)
+    with patch.object(coordinator, "async_update_listeners") as listeners:
+        handle(SEED_STATE, kind)
+    listeners.assert_not_called()
+
+
+def test_one_listener_update_per_sensor_advertisement(coordinator):
+    """One listener update per sensor advertisement."""
+    with patch.object(coordinator, "async_update_listeners") as listeners:
+        coordinator._async_handle_bluetooth_event(
+            service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}), BluetoothChange.ADVERTISEMENT
+        )
+    listeners.assert_called_once()
 
 
 # ===========================================================================
 # A single poll
 # ===========================================================================
-async def test_poll_success_marks_fresh(coordinator, controller):
-    """Poll success marks fresh."""
-    assert coordinator.poll_fresh is False
-    await coordinator._async_update()
+async def test_poll_success_makes_the_device_reachable(coordinator, controller):
+    """Poll success makes the device reachable."""
+    assert coordinator.reachable is False
+    await _poll(coordinator)
     controller.update.assert_awaited_once()
-    assert coordinator.poll_fresh is True
+    assert coordinator.reachable is True
 
 
 async def test_poll_disconnects(coordinator, controller):
     """A held connection stops the sensor data a scan window would bring."""
-    await coordinator._async_update()
+    await _poll(coordinator)
     controller.disconnect.assert_awaited_once()
 
 
 async def test_failed_disconnect_still_counts_as_success(coordinator, controller):
     """Failed disconnect still counts as success."""
     controller.disconnect.side_effect = BleakError("gone")
-    await coordinator._async_update()
-    assert coordinator.poll_fresh is True
+    await _poll(coordinator)
+    assert coordinator.reachable is True
 
 
 async def test_failed_poll_disconnects(coordinator, controller):
     """Failed poll disconnects."""
     controller.update.side_effect = TimeoutError
-    with pytest.raises(TimeoutError):
-        await coordinator._async_update()
+    await _poll(coordinator)
     controller.disconnect.assert_awaited_once()
-    assert coordinator.poll_fresh is False
+    assert coordinator.reachable is False
 
 
-def test_poll_fresh_expires(coordinator):
-    """Poll fresh expires."""
-    coordinator._last_poll_ok = time.monotonic() - coordinator_module.POLL_AVAILABLE_WINDOW - 1
-    assert coordinator.poll_fresh is False
+async def test_a_failed_operation_still_raises_after_disconnecting(coordinator, controller):
+    """A failed operation still raises after disconnecting."""
+    with pytest.raises(BleakError):
+        await coordinator.async_run(AsyncMock(side_effect=BleakError("gone")))
+    controller.disconnect.assert_awaited_once()
 
 
 # ===========================================================================
@@ -315,7 +351,7 @@ async def test_polls_once_per_stall(coordinator, controller):
     await coordinator._async_tick()
     await coordinator._async_tick()
     controller.update.assert_awaited_once()
-    assert coordinator.poll_fresh is True
+    assert coordinator.reachable is True
 
 
 async def test_failed_poll_backs_off(coordinator, controller):
@@ -423,3 +459,18 @@ def test_other_config_changes_leave_the_clock_alone(coordinator):
     """Other config changes leave the clock alone."""
     coordinator._async_core_config_updated(Event(EVENT_CORE_CONFIG_UPDATE, {"elevation": 286}))
     assert coordinator.clock.is_due(dt_util.utcnow()) is False
+
+
+# ===========================================================================
+# Startup
+# ===========================================================================
+async def test_ready_once_the_device_advertises(coordinator):
+    """Ready once the device advertises."""
+    advertise(coordinator, service_info())
+    assert await coordinator.async_wait_ready() is True
+
+
+async def test_not_ready_without_an_advertisement(coordinator):
+    """Not ready without an advertisement."""
+    with patch.object(coordinator_module, "DEVICE_STARTUP_TIMEOUT", 0.01):
+        assert await coordinator.async_wait_ready() is False

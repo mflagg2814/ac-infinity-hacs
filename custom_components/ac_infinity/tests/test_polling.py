@@ -1,7 +1,7 @@
 """PollSchedule: first poll, stall detection, and backoff."""
 
 from custom_components.ac_infinity.backoff import BACKOFF_BASE, MAX_BACKOFF, MAX_BACKOFF_EXPONENT
-from custom_components.ac_infinity.polling import STALL_AFTER, PollSchedule
+from custom_components.ac_infinity.polling import POLL_AVAILABLE_WINDOW, STALL_AFTER, PollSchedule
 
 
 def test_first_poll_is_due_immediately():
@@ -26,7 +26,7 @@ def test_stall_boundary():
 
 def test_hearing_the_device_resets_the_stall():
     """Hearing the device resets the stall."""
-    schedule = PollSchedule(last_heard=0, polled=True)
+    schedule = PollSchedule(last_heard=0, last_success=0)
     schedule.mark_heard(STALL_AFTER)
     assert not schedule.is_due(STALL_AFTER + 1)
 
@@ -42,7 +42,7 @@ def test_failed_first_poll_backs_off():
 
 def test_backoff_after_failure():
     """Backoff after failure."""
-    schedule = PollSchedule(last_heard=0, polled=True)
+    schedule = PollSchedule(last_heard=0, last_success=0)
     now = STALL_AFTER
     schedule.mark_attempt(now)
     schedule.mark_failure()
@@ -65,5 +65,18 @@ def test_success_clears_failures_and_stall():
     schedule = PollSchedule(last_heard=0, failures=3, last_attempt=STALL_AFTER)
     schedule.mark_success(STALL_AFTER + 5)
     assert schedule.failures == 0
-    assert schedule.polled
+    assert schedule.last_success == STALL_AFTER + 5
     assert not schedule.is_stalled(STALL_AFTER + 6)
+
+
+def test_never_fresh_before_a_poll():
+    """Never fresh before a poll."""
+    assert not PollSchedule(last_heard=0).is_fresh(0)
+
+
+def test_a_poll_stays_fresh_for_the_window():
+    """A poll stays fresh for the window."""
+    schedule = PollSchedule(last_heard=0)
+    schedule.mark_success(100)
+    assert schedule.is_fresh(100 + POLL_AVAILABLE_WINDOW - 1)
+    assert not schedule.is_fresh(100 + POLL_AVAILABLE_WINDOW)

@@ -1,7 +1,8 @@
 """The bluetooth discovery and user config flow steps."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
+from bleak.exc import BleakError
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -11,7 +12,7 @@ from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_USER
 from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
 from homeassistant.data_entry_flow import FlowResultType
 
-from .conftest import ADDRESS, SEED_STATE, SENSOR_PAYLOAD
+from .conftest import ADDRESS, SENSOR_PAYLOAD
 
 OTHER_ADDRESS = "AA:BB:CC:DD:EE:FF"
 
@@ -37,19 +38,46 @@ async def _init_user_step(hass, devices):
 # ===========================================================================
 # Bluetooth discovery
 # ===========================================================================
-async def test_bluetooth_discovery_proceeds_to_user_step(hass):
-    """Bluetooth discovery proceeds to user step."""
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_BLUETOOTH}, data=discovery())
+async def _discover(hass):
+    return await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_BLUETOOTH}, data=discovery())
+
+
+async def test_bluetooth_discovery_asks_to_confirm_the_device(hass):
+    """Bluetooth discovery asks to confirm the device."""
+    result = await _discover(hass)
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
+    assert result["step_id"] == "bluetooth_confirm"
+    assert result["description_placeholders"] == {"name": "A-0ECGN"}
+
+
+async def test_confirming_a_discovered_device_creates_the_entry(hass, controller):
+    """Confirming a discovered device creates the entry."""
+    result = await _discover(hass)
+    with _patch_controller(controller):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["result"].unique_id == ADDRESS
+    assert result["data"][CONF_SERVICE_DATA] == {"type": 1, "name": "A-0ECGN", "version": 0}
+
+
+async def test_a_failed_confirmation_reshows_the_form(hass, controller):
+    """A failed confirmation reshows the form."""
+    result = await _discover(hass)
+    controller.update.side_effect = BleakError("out of range")
+    with _patch_controller(controller):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert (result["type"], result["step_id"]) == (FlowResultType.FORM, "bluetooth_confirm")
+    assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_bluetooth_discovery_aborts_when_already_configured(hass):
     """Bluetooth discovery aborts when already configured."""
     MockConfigEntry(domain=DOMAIN, unique_id=ADDRESS).add_to_hass(hass)
 
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_BLUETOOTH}, data=discovery())
+    result = await _discover(hass)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
@@ -116,24 +144,14 @@ async def test_user_step_aborts_when_no_devices_found(hass):
 # ===========================================================================
 # Selecting a device
 # ===========================================================================
-@pytest.fixture
-def controller():
-    """A controller whose settings read succeeds."""
-    controller = MagicMock()
-    controller.name = "A-0ECGN"
-    controller.state = SEED_STATE
-    controller.update = AsyncMock()
-    controller.stop = AsyncMock()
-    return controller
+def _patch_controller(controller):
+    return patch("custom_components.ac_infinity.config_flow.ACInfinityController", return_value=controller)
 
 
 async def test_selecting_a_device_creates_the_entry(hass, controller):
     """Selecting a device creates the entry."""
     result = await _init_user_step(hass, [discovery()])
-    with patch(
-        "custom_components.ac_infinity.config_flow.ACInfinityController",
-        return_value=controller,
-    ):
+    with _patch_controller(controller):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_ADDRESS: ADDRESS})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -148,24 +166,19 @@ async def test_connection_failure_reshows_the_form(hass, controller, exception):
     """Connection failure reshows the form."""
     result = await _init_user_step(hass, [discovery()])
     controller.update.side_effect = exception
-    with patch(
-        "custom_components.ac_infinity.config_flow.ACInfinityController",
-        return_value=controller,
-    ):
+    with _patch_controller(controller):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_ADDRESS: ADDRESS})
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
+    controller.stop.assert_awaited_once()
 
 
 async def test_unexpected_error_reshows_the_form(hass, controller):
     """Unexpected error reshows the form."""
     result = await _init_user_step(hass, [discovery()])
     controller.update.side_effect = ValueError("boom")
-    with patch(
-        "custom_components.ac_infinity.config_flow.ACInfinityController",
-        return_value=controller,
-    ):
+    with _patch_controller(controller):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_ADDRESS: ADDRESS})
 
     assert result["type"] is FlowResultType.FORM
