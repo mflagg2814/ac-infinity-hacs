@@ -1,32 +1,22 @@
 """Config flow for ac_infinity."""
-from __future__ import annotations
 
 import logging
 from typing import Any
 
 import voluptuous as vol
 
-from homeassistant import config_entries
-from homeassistant.components.bluetooth import (
-    BluetoothServiceInfoBleak,
-    async_discovered_service_info,
-)
+from homeassistant.components.bluetooth import BluetoothServiceInfoBleak, async_discovered_service_info
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
-from homeassistant.data_entry_flow import FlowResult
 
 from .const import BLEAK_EXCEPTIONS, DOMAIN
-from .vendor.ac_infinity_ble import (
-    ACInfinityController,
-    DeviceInfo,
-    parse_manufacturer_data,
-)
+from .vendor.ac_infinity_ble import ACInfinityController, DeviceInfo, parse_manufacturer_data
 from .vendor.ac_infinity_ble.const import MANUFACTURER_ID
-
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ACInfinityConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for AC Infinity Bluetooth."""
 
     VERSION = 1
@@ -36,9 +26,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovery_info: BluetoothServiceInfoBleak | None = None
         self._discovered_devices: dict[str, BluetoothServiceInfoBleak] = {}
 
-    async def async_step_bluetooth(
-        self, discovery_info: BluetoothServiceInfoBleak
-    ) -> FlowResult:
+    async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> ConfigFlowResult:
         """Handle the bluetooth discovery step."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
@@ -52,27 +40,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = {"name": device.name}
         return await self.async_step_user()
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the user step to pick discovered device."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
             discovery_info = self._discovered_devices[address]
-            await self.async_set_unique_id(
-                discovery_info.address, raise_on_progress=False
-            )
+            await self.async_set_unique_id(discovery_info.address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
-            controller = ACInfinityController(
-                discovery_info.device, advertisement_data=discovery_info.advertisement
-            )
+            controller = ACInfinityController(discovery_info.device, advertisement_data=discovery_info.advertisement)
             try:
                 await controller.update()
             except BLEAK_EXCEPTIONS:
                 errors["base"] = "cannot_connect"
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _LOGGER.exception("Unexpected error")
                 errors["base"] = "unknown"
             else:
@@ -95,10 +77,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         else:
             current_addresses = self._async_current_ids()
             for discovery in async_discovered_service_info(self.hass):
-                if (
-                    discovery.address in current_addresses
-                    or discovery.address in self._discovered_devices
-                ):
+                if discovery.address in current_addresses or discovery.address in self._discovered_devices:
                     continue
                 self._discovered_devices[discovery.address] = discovery
 
@@ -106,15 +85,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_devices_found")
 
         devices = {}
-        _LOGGER.debug(f"self._discovered_devices: {self._discovered_devices}")
+        _LOGGER.debug("Discovered devices: %s", self._discovered_devices)
         for service_info in self._discovered_devices.values():
-            _LOGGER.debug(f"service_info: {service_info.advertisement.manufacturer_data}")
+            _LOGGER.debug("Manufacturer data: %s", service_info.advertisement.manufacturer_data)
             try:
-                device = parse_manufacturer_data(
-                    service_info.advertisement.manufacturer_data[MANUFACTURER_ID]
-                )
+                device = parse_manufacturer_data(service_info.advertisement.manufacturer_data[MANUFACTURER_ID])
                 devices[service_info.address] = f"{device.name} ({service_info.address})"
-            except (KeyError, ValueError):
+            except KeyError, ValueError:
                 # Discovered device is not a supported AC Infinity device
                 pass
 

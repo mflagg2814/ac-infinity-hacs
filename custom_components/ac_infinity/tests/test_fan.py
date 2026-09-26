@@ -1,5 +1,7 @@
 """Fan availability on real data, commanded state, OFF packets, and connection release."""
-from __future__ import annotations
+
+# These tests drive and inspect the controller's and coordinator's internals; see README.md.
+# ruff: noqa: SLF001
 
 from dataclasses import replace
 import time
@@ -25,6 +27,7 @@ def controller(seeded_device):
 
 @pytest.fixture
 def fan(coordinator, controller):
+    """A fan entity that doesn't write state."""
     entity = ACInfinityFan(coordinator, controller)
     entity.async_write_ha_state = MagicMock()
     return entity
@@ -35,10 +38,9 @@ def _sent_payload(controller) -> bytes:
     return controller._send_command.await_args.args[0][10:-2]
 
 
-@pytest.mark.parametrize(
-    ("percentage", "expected"), [(100, 100), (80, 80), (75, 80), (5, 10), (0, 0)]
-)
+@pytest.mark.parametrize(("percentage", "expected"), [(100, 100), (80, 80), (75, 80), (5, 10), (0, 0)])
 async def test_set_percentage_shows_commanded_speed(fan, percentage, expected):
+    """Set percentage shows commanded speed."""
     await fan.async_set_percentage(percentage)
     assert fan.percentage == expected
     assert fan.is_on is (expected > 0)
@@ -46,12 +48,14 @@ async def test_set_percentage_shows_commanded_speed(fan, percentage, expected):
 
 
 async def test_turn_on_with_percentage(fan, controller):
+    """Turn on with percentage."""
     await fan.async_turn_on(percentage=30)
     assert (fan.is_on, fan.percentage) == (True, 30)
     assert _sent_payload(controller) == bytes.fromhex("100102 120103")
 
 
 async def test_turn_on_without_percentage_keeps_the_saved_level(fan, controller):
+    """Turn on without percentage keeps the saved level."""
     await fan.async_turn_on()
     assert (fan.is_on, fan.percentage) == (True, 50)
     assert _sent_payload(controller) == bytes.fromhex("100102")
@@ -66,11 +70,13 @@ async def test_turn_off_sends_mode_only(fan, controller):
 
 
 async def test_command_disconnects(fan, controller):
+    """Command disconnects."""
     await fan.async_set_percentage(50)
     controller.disconnect.assert_awaited_once()
 
 
 async def test_failed_command_writes_nothing(fan, controller):
+    """Failed command writes nothing."""
     controller._send_command.side_effect = BleakError("out of range")
     with pytest.raises(BleakError):
         await fan.async_set_percentage(50)
@@ -82,12 +88,14 @@ async def test_failed_command_writes_nothing(fan, controller):
 # Availability
 # ===========================================================================
 def test_seed_is_unavailable_while_device_is_present(coordinator, fan):
+    """Seed is unavailable while device is present."""
     coordinator._available = True
     advertise(coordinator, service_info())
     assert fan.available is False
 
 
 def test_available_after_sensor_advertisement(coordinator, fan):
+    """Available after sensor advertisement."""
     coordinator._available = True
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     assert fan.available is True
@@ -102,6 +110,7 @@ async def test_poll_alone_leaves_the_level_unknown(coordinator, controller, fan)
 
 
 def test_unavailable_when_unreachable_after_real_data(coordinator, fan):
+    """Unavailable when unreachable after real data."""
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     coordinator._available = False
     coordinator._last_poll_ok = time.monotonic() - 10**6

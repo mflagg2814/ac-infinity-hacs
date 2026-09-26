@@ -1,5 +1,4 @@
 """Keeps the controller clock on Home Assistant's local time. See README.md."""
-from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -46,6 +45,7 @@ class ClockSync:
     """Sets the clock when due, reading it before and after when the controller allows."""
 
     def __init__(self, controller: ACInfinityController) -> None:
+        """Start due, so the first tick syncs."""
         self._controller = controller
         self._schedule = ClockSchedule()
         self._can_read = True
@@ -55,9 +55,11 @@ class ClockSync:
         self.last_attempt: datetime | None = None
 
     def is_due(self, now: datetime) -> bool:
+        """Whether a sync should run now."""
         return self._schedule.is_due(now)
 
     def mark_due(self) -> None:
+        """Make a sync due at once."""
         self._schedule.mark_due()
 
     async def async_attempt(self, async_run: Callable[[Operation], Awaitable[None]]) -> None:
@@ -65,7 +67,7 @@ class ClockSync:
         self.last_attempt = dt_util.utcnow()
         try:
             await async_run(self._async_sync)
-        except Exception as ex:  # pylint: disable=broad-except
+        except Exception as ex:  # noqa: BLE001 - any failure backs off and retries
             self.status = ClockStatus.FAILED
             self._schedule.mark_failure(dt_util.utcnow())
             _LOGGER.debug(
@@ -88,15 +90,11 @@ class ClockSync:
 
     def _log_sync(self, before: float | None, after: float | None) -> None:
         if self.status is ClockStatus.MISMATCH:
-            _LOGGER.warning(
-                "%s: Clock set, but reads back %+.0f s off", self._controller.name, after
-            )
+            _LOGGER.warning("%s: Clock set, but reads back %+.0f s off", self._controller.name, after)
         elif before is None:
             _LOGGER.info("%s: Clock set", self._controller.name)
         else:
-            _LOGGER.info(
-                "%s: Clock set; it was %+.0f s off", self._controller.name, before
-            )
+            _LOGGER.info("%s: Clock set; it was %+.0f s off", self._controller.name, before)
 
     async def _async_read_offset(self) -> float | None:
         """Seconds the controller is ahead of local time; None once a read has failed."""
@@ -104,7 +102,7 @@ class ClockSync:
             return None
         try:
             clock = await self._controller.read_clock(local_now())
-        except Exception as ex:  # pylint: disable=broad-except
+        except Exception as ex:  # noqa: BLE001 - reading is optional; the write goes ahead
             self._can_read = False
             _LOGGER.info(
                 "%s: Clock can't be read back, so syncs won't be confirmed: %r",

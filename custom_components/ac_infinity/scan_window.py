@@ -1,5 +1,4 @@
 """Whether Home Assistant has an active scan window open for a device."""
-from __future__ import annotations
 
 from habluetooth import BaseHaScanner
 
@@ -20,7 +19,5 @@ def active_window_open(hass: HomeAssistant, address: str) -> bool:
     """Whether any scanner that hears the device is inside an active scan window."""
     return any(
         in_active_window(device.scanner)
-        for device in bluetooth.async_scanner_devices_by_address(
-            hass, address, connectable=False
-        )
+        for device in bluetooth.async_scanner_devices_by_address(hass, address, connectable=False)
     )

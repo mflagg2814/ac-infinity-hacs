@@ -6,23 +6,9 @@ sensor and fan availability, and our additions to the vendored library.
 
 ## Running
 
-Everything is built on [`pytest-homeassistant-custom-component`][phacc]: a real Home
-Assistant instance plus the HA test toolkit.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r custom_components/ac_infinity/tests/requirements_test.txt
-pytest custom_components/ac_infinity/tests
-```
-
-Run from the repository root — `pytest.ini`'s `pythonpath` is relative to it. For
-coverage:
-
-```bash
-pytest custom_components/ac_infinity/tests \
-  --cov=custom_components.ac_infinity --cov-report=term-missing
-```
+Setup and how to run these are shared with every other suite in this config — see
+[`custom_components/tests/README.md`](../../tests/README.md). Coverage leaves out the
+vendored library (`.coveragerc`).
 
 ## Layout
 
@@ -39,11 +25,13 @@ pytest custom_components/ac_infinity/tests \
 | `test_coordinator.py`        | Scan-window request, sensor-payload detection, polls and disconnects, poll and clock timing around scan windows, availability |
 | `test_fan.py`                | Unavailable until the device reports its level; commands show the acknowledged state, send mode-only OFF, and release the connection |
 | `test_sensor.py`             | Sensors stay unavailable on the setup seed until a sensor advertisement arrives; clock diagnostics, their translations and icons |
-| `test_vendor.py`             | Clock encoding, `set_clock`/`read_clock`/`disconnect`, and the captured settings reply |
+| `test_vendor.py`             | Clock encoding, `set_clock`/`read_clock`/`disconnect`, connecting and cache recovery, response assembly, and the captured settings reply |
 | `test_manifest.py`           | No requirements, and nothing imports an installed copy of the library |
 
 ## Notes on the harness
 
+- The coordinator, fan, sensor and vendor suites drive and inspect private state, so
+  they suppress ruff's `SLF001` file-wide.
 - phacc doesn't ship Home Assistant's Bluetooth injection helpers, so the coordinator
   is built directly and never started. Advertisements are delivered by calling
   `_async_handle_bluetooth_event` with the base class handler patched out.

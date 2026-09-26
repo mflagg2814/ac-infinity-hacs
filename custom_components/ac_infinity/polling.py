@@ -1,5 +1,4 @@
 """When to poll the device."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -19,6 +18,7 @@ class PollSchedule:
     last_attempt: float | None = None
 
     def is_stalled(self, now: float) -> bool:
+        """Whether nothing has been heard from the device for STALL_AFTER."""
         return now - self.last_heard >= STALL_AFTER
 
     def is_due(self, now: float) -> bool:
@@ -31,18 +31,23 @@ class PollSchedule:
 
     @property
     def backoff(self) -> float:
+        """Seconds to wait after the last failed poll."""
         return backoff_delay(self.failures)
 
     def mark_heard(self, now: float) -> None:
+        """Record sensor data arriving."""
         self.last_heard = now
 
     def mark_attempt(self, now: float) -> None:
+        """Record a poll starting."""
         self.last_attempt = now
 
     def mark_success(self, now: float) -> None:
+        """Record a poll succeeding."""
         self.polled = True
         self.last_heard = now
         self.failures = 0
 
     def mark_failure(self) -> None:
+        """Record a poll failing."""
         self.failures = count_failure(self.failures)

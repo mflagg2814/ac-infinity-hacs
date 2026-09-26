@@ -1,13 +1,8 @@
+"""Advertisement parsing and command framing."""
+
 from dataclasses import replace
 
-from .capabilities import (
-    H_TYPES,
-    HOME_TYPES,
-    MODEL_NAMES,
-    MULTIPORT_TYPES,
-    SENSOR_TYPES,
-    family,
-)
+from .capabilities import H_TYPES, HOME_TYPES, MODEL_NAMES, MULTIPORT_TYPES, SENSOR_TYPES, family
 from .commands import ParameterCodec
 from .exceptions import FrameValidationError
 from .measurements import packed_sensor_values, reading
@@ -17,10 +12,12 @@ from .util import crc16, get_bit, get_bits
 
 
 def get_type(type: int) -> str:
+    """The model family letter."""
     return family(type)
 
 
 def get_mode(mode: int) -> str:
+    """A work mode's display name; empty if unknown."""
     try:
         return ControllerMode(mode).name.replace("_", " ")
     except ValueError:
@@ -28,6 +25,7 @@ def get_mode(mode: int) -> str:
 
 
 def parse_manufacturer_data(data: bytes) -> DeviceInfo:
+    """Identity, and readings from an extended advertisement."""
     if len(data) not in (17, 27) or data[12] not in MODEL_NAMES:
         raise ValueError("Unsupported AC Infinity advertisement")
     sensor = data[12] in SENSOR_TYPES
@@ -59,9 +57,7 @@ def parse_manufacturer_data(data: bytes) -> DeviceInfo:
         hum = reading(data, 16)
     device = replace(device, tmp=tmp, hum=hum)
     if vpd_sensor:
-        device = replace(
-            device, vpd_state=get_bits(data[6], 2, 2), vpd=reading(data, 7)
-        )
+        device = replace(device, vpd_state=get_bits(data[6], 2, 2), vpd=reading(data, 7))
     if not sensor:
         device = replace(device, fan=data[18] if data[18] <= 10 else None)
     if device.version >= 3 and device.type in MULTIPORT_TYPES:
@@ -83,6 +79,7 @@ class Protocol:
     """Protocol for AC Infinity Controllers."""
 
     def __init__(self) -> None:
+        """Initialize the protocol."""
         self._head = [165, 0]
         self._scan_record_length = 27
 
@@ -123,15 +120,9 @@ class Protocol:
             raise FrameValidationError("Invalid response header CRC")
         if data[-2:] != bytes(crc16(list(data[8:-2]))):
             raise FrameValidationError("Invalid response body CRC")
-        if (
-            expected_sequence is not None
-            and int.from_bytes(data[4:6], "big") != expected_sequence
-        ):
+        if expected_sequence is not None and int.from_bytes(data[4:6], "big") != expected_sequence:
             raise FrameValidationError("Unexpected response sequence")
-        if (
-            expected_command is not None
-            and int.from_bytes(data[8:10], "big") != expected_command
-        ):
+        if expected_command is not None and int.from_bytes(data[8:10], "big") != expected_command:
             raise FrameValidationError("Unexpected response command")
         return bytes(data[10:-2])
 
@@ -144,19 +135,16 @@ class Protocol:
         return int.from_bytes(data[2:4], "big") + 12
 
     def get_model_data(self, type: int, b: int, sequence: int) -> bytes:
-        return self.get_parameters(
-            DeviceInfo(type, "", 0), b, list(range(16, 24)), sequence
-        )
+        """Legacy packet API: read all mode parameters."""
+        return self.get_parameters(DeviceInfo(type, "", 0), b, list(range(16, 24)), sequence)
 
-    def set_level(
-        self, type: int, work_type: int, level: int, b: int, sequence: int
-    ) -> bytes:
+    def set_level(self, type: int, work_type: int, level: int, b: int, sequence: int) -> bytes:
         """Legacy packet API; newer families require version-aware parameters."""
         if type not in MODEL_NAMES or type in H_TYPES | HOME_TYPES | SENSOR_TYPES:
             raise ValueError("Use version-aware set_parameters for this device")
         if work_type not in [1, 2]:
             raise ValueError("Work type must be 1 (off) or 2 (on)")
-        if level not in range(0, 11):
+        if level not in range(11):
             raise ValueError("Level must be between 0 and 10")
 
         command = [16, 1, work_type, work_type + 16, 1, level]
@@ -164,26 +152,22 @@ class Protocol:
             command += [255, b]
         return self._add_head(command, 3, sequence)
 
-    def get_parameters(
-        self, device: DeviceInfo, port: int, tags: list[int], sequence: int
-    ) -> bytes:
+    def get_parameters(self, device: DeviceInfo, port: int, tags: list[int], sequence: int) -> bytes:
+        """Frame reading tags from port."""
         payload = ParameterCodec(device.profile).encode_get(port, tags)
         return self._add_head(list(payload), 1, sequence)
 
-    def set_parameters(
-        self, device: DeviceInfo, port: int, values: dict[int, bytes], sequence: int
-    ) -> bytes:
+    def set_parameters(self, device: DeviceInfo, port: int, values: dict[int, bytes], sequence: int) -> bytes:
+        """Frame writing values, by tag, to port."""
         payload = ParameterCodec(device.profile).encode_set(port, values)
         return self._add_head(list(payload), 3, sequence)
 
-    def parse_parameters(
-        self, data: bytes, device: DeviceInfo, port: int
-    ) -> dict[int, bytes]:
+    def parse_parameters(self, data: bytes, device: DeviceInfo, port: int) -> dict[int, bytes]:
+        """Values, by tag, from a read response frame."""
         payload = self.parse_response(data, expected_command=1)
         return ParameterCodec(device.profile).decode_get(payload, port)
 
-    def validate_ack(
-        self, data: bytes, device: DeviceInfo, port: int, tags: set[int]
-    ) -> None:
+    def validate_ack(self, data: bytes, device: DeviceInfo, port: int, tags: set[int]) -> None:
+        """Raise unless a write response frame acknowledges every tag."""
         payload = self.parse_response(data, expected_command=3)
         ParameterCodec(device.profile).validate_ack(payload, port, tags)

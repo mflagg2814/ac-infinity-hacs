@@ -2,7 +2,6 @@
 
 async_run disconnects afterward; a held connection stops the device's sensor data.
 """
-from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
@@ -38,17 +37,13 @@ def _receiver_name(node: ast.expr) -> str | None:
 
 
 def _called_names(node: ast.AST) -> set[str | None]:
-    return {
-        _receiver_name(call.func) for call in ast.walk(node) if isinstance(call, ast.Call)
-    }
+    return {_receiver_name(call.func) for call in ast.walk(node) if isinstance(call, ast.Call)}
 
 
 def _operation_nodes(tree: ast.Module) -> set[int]:
     """Ids of every node inside a function passed to async_run, or called from one."""
     functions = {
-        node.name: node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name: node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     pending = [
         _receiver_name(arg)
@@ -86,6 +81,7 @@ def direct_connecting_calls(source: str) -> Iterator[int]:
     ids=lambda p: p.name,
 )
 def test_no_direct_connecting_calls(path):
+    """No direct connecting calls."""
     assert list(direct_connecting_calls(path.read_text())) == []
 
 
@@ -98,10 +94,12 @@ def test_no_direct_connecting_calls(path):
     ],
 )
 def test_detects_direct_calls(source):
+    """Detects direct calls."""
     assert list(direct_connecting_calls(source)) == [2]
 
 
 def test_passing_a_method_to_async_run_is_allowed():
+    """Passing a method to async run is allowed."""
     source = "async def f(self):\n    await self.coordinator.async_run(self._device.turn_off)\n"
     assert list(direct_connecting_calls(source)) == []
 
@@ -110,11 +108,13 @@ OPERATION = "async def op(self):\n    await self._controller.set_clock(now)\n"
 
 
 def test_calls_inside_an_operation_passed_to_async_run_are_allowed():
+    """Calls inside an operation passed to async run are allowed."""
     source = OPERATION + "async def f(self, async_run):\n    await async_run(self.op)\n"
     assert list(direct_connecting_calls(source)) == []
 
 
 def test_helpers_called_from_an_operation_are_allowed():
+    """Helpers called from an operation are allowed."""
     source = (
         "async def helper(self):\n    await self._controller.read_clock(now)\n"
         "async def op(self):\n    await self.helper()\n"
@@ -124,8 +124,10 @@ def test_helpers_called_from_an_operation_are_allowed():
 
 
 def test_calls_inside_a_function_never_passed_to_async_run_are_flagged():
+    """Calls inside a function never passed to async run are flagged."""
     assert list(direct_connecting_calls(OPERATION)) == [2]
 
 
 def test_exempt_config_flow_still_disconnects():
+    """Exempt config flow still disconnects."""
     assert "await controller.stop()" in (INTEGRATION / "config_flow.py").read_text()

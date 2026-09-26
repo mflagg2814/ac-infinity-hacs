@@ -4,6 +4,8 @@ from enum import IntEnum
 
 
 class ControllerMode(IntEnum):
+    """Controller work mode."""
+
     OFF = 1
     ON = 2
     AUTO = 3
@@ -19,4 +21,6 @@ class ControllerMode(IntEnum):
 
 
 class HomeMode(IntEnum):
+    """Home appliance mode."""
+
     MANUAL = 1

@@ -1,5 +1,4 @@
 """When to set the controller clock."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
@@ -35,16 +34,20 @@ class ClockSchedule:
     failures: int = 0
 
     def is_due(self, now: datetime) -> bool:
+        """Whether a sync should run now."""
         return self.next_due is None or now >= self.next_due
 
     def mark_due(self) -> None:
+        """Make a sync due at once."""
         self.next_due = None
 
     def mark_success(self, now: datetime, tz: tzinfo) -> None:
+        """Schedule the next sync a day out, or at the next UTC offset change in tz."""
         self.failures = 0
         end = now + SYNC_INTERVAL
         self.next_due = next_offset_change(tz, now, end) or end
 
     def mark_failure(self, now: datetime) -> None:
+        """Back off before the next attempt."""
         self.failures = count_failure(self.failures)
         self.next_due = now + timedelta(seconds=backoff_delay(self.failures))

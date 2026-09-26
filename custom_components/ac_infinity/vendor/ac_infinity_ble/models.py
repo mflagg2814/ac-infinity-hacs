@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""Device and port state."""
 
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -11,6 +11,8 @@ from .routing import ProtocolProfile, resolve_profile
 
 @dataclass(frozen=True)
 class PortState:
+    """One output port's state; port 0 is the controller itself."""
+
     id: int
     connected: bool = True
     kind: str | None = None
@@ -44,26 +46,34 @@ class PortMap(Mapping[int, PortState]):
     """Owned, read-only port collection with dataclasses.asdict support."""
 
     def __init__(self, ports: Mapping[int, PortState] | None = None) -> None:
+        """Copy ports, so later changes to the source don't show through."""
         self._ports = MappingProxyType(dict(ports or {}))
 
     def __getitem__(self, key: int) -> PortState:
+        """Return the port with this id."""
         return self._ports[key]
 
     def __iter__(self) -> Iterator[int]:
+        """Iterate over port ids."""
         return iter(self._ports)
 
     def __len__(self) -> int:
+        """Return the number of ports."""
         return len(self._ports)
 
     def __deepcopy__(self, memo: dict[int, object]) -> dict[int, dict[str, Any]]:
+        """Copy as plain dicts, which is what dataclasses.asdict needs."""
         return {key: asdict(value) for key, value in self._ports.items()}
 
     def __repr__(self) -> str:
+        """Represent as a plain dict."""
         return repr(dict(self._ports))
 
 
 @dataclass(frozen=True)
 class DeviceInfo:
+    """Controller identity and last known state."""
+
     type: int
     name: str
     version: int
@@ -85,10 +95,12 @@ class DeviceInfo:
     device_information: DeviceInformation = field(default_factory=DeviceInformation)
 
     def __post_init__(self) -> None:
+        """Own the ports as a read-only PortMap."""
         object.__setattr__(self, "ports", PortMap(self.ports))
 
     @property
     def profile(self) -> ProtocolProfile:
+        """The protocol this model and firmware version speak."""
         return resolve_profile(self.type, self.version)
 
     @property

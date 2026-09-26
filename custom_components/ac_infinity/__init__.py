@@ -1,5 +1,4 @@
 """The ac_infinity integration."""
-from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
@@ -10,11 +9,7 @@ from bleak_retry_connector import close_stale_connections_by_address
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONF_ADDRESS,
-    CONF_SERVICE_DATA,
-    Platform,
-)
+from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
@@ -45,7 +40,7 @@ async def _async_close_stale_connections(address: str) -> None:
     try:
         async with asyncio.timeout(STALE_CONNECTION_TIMEOUT):
             await close_stale_connections_by_address(address)
-    except Exception as ex:  # pylint: disable=broad-except
+    except Exception as ex:  # noqa: BLE001 - best effort; a stale connection only delays setup
         _LOGGER.debug("%s: Closing stale connections failed: %s", address, ex)
 
 
@@ -54,23 +49,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     address: str = entry.data[CONF_ADDRESS].upper()
     ble_device = bluetooth.async_ble_device_from_address(hass, address, True)
     if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find AC Infinity device with address {address}"
-        )
+        raise ConfigEntryNotReady(f"Could not find AC Infinity device with address {address}")
 
     await _async_close_stale_connections(address)
     controller = ACInfinityController(
         ble_device,
         seed_state(entry.data[CONF_SERVICE_DATA]),
-        ble_device_provider=lambda: bluetooth.async_ble_device_from_address(
-            hass, address, True
-        ),
+        ble_device_provider=lambda: bluetooth.async_ble_device_from_address(hass, address, True),
     )
     coordinator = ACInfinityDataUpdateCoordinator(hass, _LOGGER, ble_device, controller)
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityData(
-        controller, coordinator
-    )
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ACInfinityData(controller, coordinator)
 
     entry.async_on_unload(coordinator.async_start())
     if not await coordinator.async_wait_ready():

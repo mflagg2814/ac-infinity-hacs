@@ -10,9 +10,7 @@ CLOCK_TAG = 0x01
 def encode_clock(now: datetime) -> bytes:
     """Year of century, month, day, weekday (Sunday 1 to Saturday 7), time."""
     weekday = now.isoweekday() % 7 + 1
-    return bytes(
-        (now.year % 100, now.month, now.day, weekday, now.hour, now.minute, now.second)
-    )
+    return bytes((now.year % 100, now.month, now.day, weekday, now.hour, now.minute, now.second))
 
 
 def decode_clock(value: bytes, reference: datetime) -> datetime:

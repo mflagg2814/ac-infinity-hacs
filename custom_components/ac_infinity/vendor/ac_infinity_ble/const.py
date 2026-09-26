@@ -1,3 +1,5 @@
+"""Advertisement and GATT identifiers."""
+
 from enum import Enum
 
 MANUFACTURER_ID = 2306

@@ -10,21 +10,23 @@ from .routing import ProtocolProfile
 
 @dataclass(frozen=True)
 class ParameterCodec:
+    """Encodes and decodes parameter payloads for one protocol profile."""
+
     profile: ProtocolProfile
 
     def encode_get(self, port: int, tags: list[int]) -> bytes:
+        """Payload reading tags from port."""
         return bytes(tags) + self.profile.port_suffix(port)
 
     def encode_set(self, port: int, values: dict[int, bytes]) -> bytes:
+        """Payload writing values, by tag, to port."""
         if not self.profile.writable:
             raise ValueError("Device does not support output controls")
         suffix = self.profile.port_suffix(port)
         payload = bytearray()
         for tag, value in values.items():
             payload.append(tag)
-            payload.extend(
-                len(value).to_bytes(self.profile.parameter_length_size, "big")
-            )
+            payload.extend(len(value).to_bytes(self.profile.parameter_length_size, "big"))
             payload.extend(value)
         return bytes(payload) + suffix
 
@@ -37,6 +39,7 @@ class ParameterCodec:
         return payload
 
     def decode_get(self, payload: bytes, port: int) -> dict[int, bytes]:
+        """Values, by tag, from a read response."""
         payload = self._strip_port(payload, port)
         width = self.profile.parameter_length_size
         values: dict[int, bytes] = {}
@@ -54,6 +57,7 @@ class ParameterCodec:
         return values
 
     def validate_ack(self, payload: bytes, port: int, tags: set[int]) -> None:
+        """Raise unless every tag written was acknowledged without error."""
         payload = self._strip_port(payload, port)
         if len(payload) != len(tags) * 2:
             raise ParameterValidationError("Invalid acknowledgement length")
@@ -64,10 +68,9 @@ class ParameterCodec:
             raise CommandRejectedError("Controller rejected command")
 
     def decode_output(self, values: dict[int, bytes], old: PortState) -> PortState:
+        """Old updated with the mode and saved levels from a settings read."""
         required = {16, 18} if self.profile.separate_power else {16, 17, 18}
-        if not required <= values.keys() or any(
-            len(values[tag]) != 1 for tag in required
-        ):
+        if not required <= values.keys() or any(len(values[tag]) != 1 for tag in required):
             raise ParameterValidationError("Missing or malformed mode parameters")
         mode, level_on = values[16][0], values[18][0] & 15
         if self.profile.packed_manual_level:
@@ -88,16 +91,11 @@ class ParameterCodec:
             level=old.level,
         )
 
-    def output_values(
-        self, on: bool, level: int | None, old: PortState | None = None
-    ) -> dict[int, bytes]:
+    def output_values(self, on: bool, level: int | None, old: PortState | None = None) -> dict[int, bytes]:
+        """Values, by tag, that switch an output and optionally set its level."""
         if not self.profile.writable:
             raise ValueError("Device does not support output controls")
-        if level is not None and (
-            isinstance(level, bool)
-            or not isinstance(level, int)
-            or not 0 <= level <= 10
-        ):
+        if level is not None and (isinstance(level, bool) or not isinstance(level, int) or not 0 <= level <= 10):
             raise ValueError("Level must be an integer between 0 and 10")
         # Home mode 1 is manual; 0x16 carries its independent power flag.
         values = (
@@ -108,35 +106,21 @@ class ParameterCodec:
         if on and level is not None:
             if self.profile.packed_manual_level:
                 if old is None or old.raw_on_parameter is None:
-                    raise ParameterValidationError(
-                        "Read settings before changing the packed manual level"
-                    )
+                    raise ParameterValidationError("Read settings before changing the packed manual level")
                 values[18] = bytes([(level << 4) | (old.raw_on_parameter & 15)])
             else:
                 values[18] = bytes([level])
         return values
 
-    def confirmed_output(
-        self, old: PortState, on: bool, level: int | None
-    ) -> PortState:
+    def confirmed_output(self, old: PortState, on: bool, level: int | None) -> PortState:
         """Apply only after ACK validation, preserving presets on mode-only writes."""
         return replace(
             old,
-            mode=old.mode
-            if self.profile.separate_power
-            else ControllerMode.ON
-            if on
-            else ControllerMode.OFF,
+            mode=old.mode if self.profile.separate_power else ControllerMode.ON if on else ControllerMode.OFF,
             power=on if self.profile.separate_power else None,
-            level=level
-            if on and level is not None
-            else old.level_on
-            if on
-            else old.level_off,
+            level=level if on and level is not None else old.level_on if on else old.level_off,
             level_on=level if on and level is not None else old.level_on,
             raw_on_parameter=(
-                self.output_values(on, level, old)[18][0]
-                if on and level is not None
-                else old.raw_on_parameter
+                self.output_values(on, level, old)[18][0] if on and level is not None else old.raw_on_parameter
             ),
         )

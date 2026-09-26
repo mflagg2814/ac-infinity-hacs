@@ -1,19 +1,17 @@
 """Entity names come from the device's name, so a renamed device renames its entities."""
-from __future__ import annotations
 
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.ac_infinity.const import DOMAIN
 from homeassistant.const import CONF_ADDRESS, CONF_SERVICE_DATA
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.ac_infinity.const import DOMAIN
-
 from .conftest import ADDRESS, SETUP_SEED
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 INTEGRATION = Path(__file__).parents[1]
 # Entities named by translation; temperature and humidity take their device class's name
@@ -62,12 +60,8 @@ async def loaded_entry(hass, coordinator, seeded_device):
             "custom_components.ac_infinity.bluetooth.async_ble_device_from_address",
             return_value=MagicMock(),
         ),
-        patch(
-            "custom_components.ac_infinity.close_stale_connections_by_address", AsyncMock()
-        ),
-        patch(
-            "custom_components.ac_infinity.ACInfinityController", return_value=seeded_device
-        ),
+        patch("custom_components.ac_infinity.close_stale_connections_by_address", AsyncMock()),
+        patch("custom_components.ac_infinity.ACInfinityController", return_value=seeded_device),
         patch(
             "custom_components.ac_infinity.ACInfinityDataUpdateCoordinator",
             return_value=coordinator,
@@ -79,9 +73,8 @@ async def loaded_entry(hass, coordinator, seeded_device):
 
 
 @pytest.mark.parametrize(("_suffix", "entity_id", "friendly_name"), ENTITIES)
-async def test_entities_keep_their_ids_and_take_the_device_name(
-    hass, loaded_entry, _suffix, entity_id, friendly_name
-):
+async def test_entities_keep_their_ids_and_take_the_device_name(hass, loaded_entry, _suffix, entity_id, friendly_name):
+    """Entities keep their ids and take the device name."""
     assert hass.states.get(entity_id).attributes["friendly_name"] == friendly_name
 
 
@@ -93,9 +86,8 @@ async def test_entities_keep_their_ids_and_take_the_device_name(
         ("sensor.last_blowymatron_clock_drift", "Whirlwind Last Clock Drift"),
     ],
 )
-async def test_renaming_the_device_renames_its_entities(
-    hass, loaded_entry, entity_id, friendly_name
-):
+async def test_renaming_the_device_renames_its_entities(hass, loaded_entry, entity_id, friendly_name):
+    """Renaming the device renames its entities."""
     registry = dr.async_get(hass)
     device = registry.async_get_device(connections={(dr.CONNECTION_BLUETOOTH, ADDRESS)})
     registry.async_update_device(device.id, name_by_user="Whirlwind")
@@ -105,6 +97,7 @@ async def test_renaming_the_device_renames_its_entities(
 
 @pytest.mark.parametrize("file", ["strings.json", "translations/en.json"])
 def test_every_translation_key_has_a_name(file):
+    """Every translation key has a name."""
     entity = json.loads((INTEGRATION / file).read_text())["entity"]
     for platform, key in TRANSLATED:
         assert entity[platform][key]["name"], (platform, key)

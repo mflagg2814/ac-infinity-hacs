@@ -3,18 +3,12 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from .capabilities import (
-    H_TYPES,
-    HOME_TYPES,
-    MODEL_NAMES,
-    MODEL_NUMBERS,
-    MULTIPORT_TYPES,
-    SENSOR_TYPES,
-    is_h4,
-)
+from .capabilities import H_TYPES, HOME_TYPES, MODEL_NAMES, MODEL_NUMBERS, MULTIPORT_TYPES, SENSOR_TYPES, is_h4
 
 
 class TelemetryLayout(Enum):
+    """Telemetry frame layout."""
+
     LEGACY = "legacy"
     V6 = "v6"
     SENSOR = "sensor"
@@ -25,6 +19,8 @@ class TelemetryLayout(Enum):
 
 @dataclass(frozen=True)
 class ProtocolProfile:
+    """How to talk to one model and firmware version."""
+
     model_name: str
     telemetry: TelemetryLayout
     addressed: bool
@@ -38,9 +34,11 @@ class ProtocolProfile:
 
     @property
     def read_tags(self) -> tuple[int, ...]:
+        """Parameter tags a settings read requests."""
         return (16, 18) if self.separate_power else tuple(range(16, 24))
 
     def port_suffix(self, port: int) -> bytes:
+        """Bytes addressing port in a command; empty for single-port models."""
         if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 255:
             raise ValueError("Invalid port")
         if port and not self.addressed:

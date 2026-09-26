@@ -1,24 +1,16 @@
 """The ac_infinity fan platform."""
-from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from functools import partial
 import math
 from typing import Any
 
+from homeassistant.components.bluetooth.passive_update_coordinator import PassiveBluetoothCoordinatorEntity
 from homeassistant.components.fan import FanEntity, FanEntityFeature
-
-from homeassistant.components.bluetooth.passive_update_coordinator import (
-    PassiveBluetoothCoordinatorEntity,
-)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.util.percentage import (
-    int_states_in_range,
-    ranged_value_to_percentage,
-    percentage_to_ranged_value,
-)
+from homeassistant.util.percentage import int_states_in_range, percentage_to_ranged_value, ranged_value_to_percentage
 
 from .const import DOMAIN
 from .coordinator import ACInfinityDataUpdateCoordinator
@@ -41,15 +33,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the light platform for LEDBLE."""
+    """Set up the fan platform."""
     data: ACInfinityData = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([ACInfinityFan(data.coordinator, data.device)])
 
 
-class ACInfinityFan(
-    PassiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], FanEntity
-):
-    """Representation of AC Infinity sensor."""
+class ACInfinityFan(PassiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], FanEntity):
+    """The controller's fan output."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "fan"
@@ -61,7 +51,7 @@ class ACInfinityFan(
         coordinator: ACInfinityDataUpdateCoordinator,
         device: ACInfinityController,
     ) -> None:
-        """Initialize an AC Infinity sensor."""
+        """Initialize the fan."""
         super().__init__(coordinator)
         self._device = device
         self._attr_unique_id = f"{self._device.address}_fan"
@@ -103,9 +93,7 @@ class ACInfinityFan(
         """Handle updating _attr values."""
         level = self._device.state.fan
         self._attr_is_on = self._device.is_on
-        self._attr_percentage = (
-            None if level is None else ranged_value_to_percentage(SPEED_RANGE, level)
-        )
+        self._attr_percentage = None if level is None else ranged_value_to_percentage(SPEED_RANGE, level)
 
     @callback
     def _handle_coordinator_update(self, *args: Any) -> None:
@@ -115,7 +103,5 @@ class ACInfinityFan(
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
-        self.async_on_remove(
-            self._device.register_callback(self._handle_coordinator_update)
-        )
+        self.async_on_remove(self._device.register_callback(self._handle_coordinator_update))
         return await super().async_added_to_hass()

@@ -9,6 +9,7 @@ from .routing import TelemetryLayout
 
 
 def frame_length(data: bytes | bytearray, state: DeviceInfo) -> int | None:
+    """Length of the telemetry frame data starts; None until its length field arrives."""
     if state.profile.telemetry == TelemetryLayout.SENSOR:
         return 31
     width = state.profile.parameter_length_size
@@ -18,6 +19,7 @@ def frame_length(data: bytes | bytearray, state: DeviceInfo) -> int | None:
 
 
 def parse_telemetry(data: bytes | bytearray, state: DeviceInfo) -> DeviceInfo:
+    """State updated from a complete telemetry frame."""
     if data[:4] != b"\x1e\xff\x02\x09" or len(data) != frame_length(data, state):
         raise ValueError("Invalid telemetry framing")
     return _DECODERS[state.profile.telemetry](data, state)
@@ -26,11 +28,7 @@ def parse_telemetry(data: bytes | bytearray, state: DeviceInfo) -> DeviceInfo:
 def _parse_sensor(data: bytes | bytearray, state: DeviceInfo) -> DeviceInfo:
     if len(data) != 31:
         raise ValueError("Invalid sensor telemetry length")
-    tmp, hum = (
-        packed_sensor_values(data[19:22])
-        if state.version > 3
-        else (reading(data, 19, 10), float(data[21]))
-    )
+    tmp, hum = packed_sensor_values(data[19:22]) if state.version > 3 else (reading(data, 19, 10), float(data[21]))
     return replace(
         state,
         tmp=tmp,
@@ -43,9 +41,7 @@ def _parse_home(data: bytes | bytearray, state: DeviceInfo) -> DeviceInfo:
     if len(data) < 28:
         raise ValueError("Truncated home appliance telemetry")
     kind = state.profile.root_kind
-    port = PortState(
-        0, kind=kind, level=data[7] >> 4, mode=data[23], fault=bool(data[7] & 2)
-    )
+    port = PortState(0, kind=kind, level=data[7] >> 4, mode=data[23], fault=bool(data[7] & 2))
     return replace(
         state,
         tmp=reading(data, 12),
@@ -67,8 +63,7 @@ def _parse_controller(data: bytes | bytearray, state: DeviceInfo) -> DeviceInfo:
             port_id,
             connected=data[offset] != 255,
             raw_type=raw,
-            kind=(load_kind(data[offset + 7]) if modern else None)
-            or recognized_kind(raw),
+            kind=(load_kind(data[offset + 7]) if modern else None) or recognized_kind(raw),
             level=(data[offset + 2] >> 2) & 15 if modern else data[offset + 3] >> 4,
             mode=data[offset + 3] & 15,
             fault=bool(data[offset + 2] & 1) if modern else False,
@@ -102,18 +97,12 @@ def _parse_h(data: bytes | bytearray, state: DeviceInfo) -> DeviceInfo:
     else:
         sensor_count = data[7] & 63
         # The APK accepts both original and expanded H headers.
-        expanded = (
-            len(data) >= 13
-            and len(data)
-            == 13 + (data[11] >> 4) * 10 + sensor_count * 4 + (data[12] & 15) * 3
-        )
+        expanded = len(data) >= 13 and len(data) == 13 + (data[11] >> 4) * 10 + sensor_count * 4 + (data[12] & 15) * 3
         base = 11 if expanded else 8
         port_count, selected = data[base] >> 4, data[base] & 15
         offset = base + 2 + (data[base + 1] & 15) * 3
         stride, sensor_stride, sort_length = 10, 4, 0
-    if offset + port_count * stride + sort_length + sensor_count * sensor_stride != len(
-        data
-    ):
+    if offset + port_count * stride + sort_length + sensor_count * sensor_stride != len(data):
         raise ValueError("Invalid AI port/sensor counts")
     ports = {}
     for index in range(port_count):

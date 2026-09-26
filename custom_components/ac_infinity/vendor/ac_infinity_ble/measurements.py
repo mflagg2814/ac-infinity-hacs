@@ -2,6 +2,7 @@
 
 
 def reading(data: bytes | bytearray, offset: int, scale: int = 100) -> float | None:
+    """A signed 16-bit reading divided by scale; None for the missing-sensor marker."""
     value = int.from_bytes(data[offset : offset + 2], "big", signed=True)
     return None if value == -32768 else value / scale
 

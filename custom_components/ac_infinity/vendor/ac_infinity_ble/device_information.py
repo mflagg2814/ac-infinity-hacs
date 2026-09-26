@@ -11,6 +11,8 @@ REVISION_CHARACTERISTICS = {
 
 @dataclass(frozen=True)
 class DeviceInformation:
+    """GATT Device Information revision strings."""
+
     firmware_revision: str | None = None
     hardware_revision: str | None = None
     software_revision: str | None = None

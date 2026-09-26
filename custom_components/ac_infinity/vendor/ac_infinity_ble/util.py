@@ -1,19 +1,25 @@
+"""Bit and CRC helpers for the wire format."""
+
 import ctypes
 
 
 def get_short(b: bytes | bytearray, i: int) -> int:
+    """The signed big-endian 16-bit value at i."""
     return ctypes.c_int16((b[i + 1] & 255) | ((b[i] << 8) & 65280)).value
 
 
 def get_bits(b: int, i: int, i2: int) -> int:
+    """The i2 bits of b starting i bits from the most significant."""
     return (b >> ((8 - i) - i2)) & (255 >> (8 - i2))
 
 
 def get_bit(b: int, i: int) -> bool:
+    """Whether bit i, counted from the most significant, is clear."""
     return (b >> (7 - i)) & 1 == 0
 
 
 def crc16(data: list[int], i: int | None = None, i2: int | None = None) -> list[int]:
+    """CRC-16/CCITT-FALSE of i2 bytes from i, or of all of data, big-endian."""
     if i is None or i2 is None:
         i = 0
         i2 = len(data)

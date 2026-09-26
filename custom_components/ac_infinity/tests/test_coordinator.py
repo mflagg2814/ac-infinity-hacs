@@ -1,5 +1,7 @@
 """Coordinator: scan window requests, sensor data, polls, clock syncs, and their timing."""
-from __future__ import annotations
+
+# These tests drive and inspect the controller's and coordinator's internals; see README.md.
+# ruff: noqa: SLF001
 
 import asyncio
 from dataclasses import replace
@@ -10,19 +12,16 @@ from unittest.mock import MagicMock, patch
 from bleak.exc import BleakError
 import pytest
 
-from homeassistant.components.bluetooth import BluetoothCallbackReplay, BluetoothScanningMode
-from homeassistant.components.bluetooth.passive_update_coordinator import (
-    PassiveBluetoothDataUpdateCoordinator,
-)
-from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
-from homeassistant.core import CoreState, Event
-from homeassistant.util import dt as dt_util
-
 from custom_components.ac_infinity import coordinator as coordinator_module
 from custom_components.ac_infinity.backoff import BACKOFF_BASE
 from custom_components.ac_infinity.coordinator import ACTIVE_SCAN_INTERVAL, carries_sensor_data
 from custom_components.ac_infinity.polling import STALL_AFTER
 from custom_components.ac_infinity.vendor.ac_infinity_ble.const import MANUFACTURER_ID
+from homeassistant.components.bluetooth import BluetoothCallbackReplay, BluetoothScanningMode
+from homeassistant.components.bluetooth.passive_update_coordinator import PassiveBluetoothDataUpdateCoordinator
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
+from homeassistant.core import CoreState, Event
+from homeassistant.util import dt as dt_util
 
 from .conftest import ADDRESS, SEED_STATE, SENSOR_PAYLOAD, advertise, service_info
 
@@ -63,6 +62,7 @@ def _stall(coordinator) -> None:
     ],
 )
 def test_carries_sensor_data(manufacturer_data, expected):
+    """Carries sensor data."""
     assert carries_sensor_data(service_info(manufacturer_data)) is expected
 
 
@@ -99,6 +99,7 @@ def test_own_registration_adds_no_default_windows(coordinator):
 
 
 async def test_stop_cancels_everything(hass, coordinator):
+    """Stop cancels everything."""
     cancels = [MagicMock(), MagicMock(), MagicMock()]
     with (
         patch.object(PassiveBluetoothDataUpdateCoordinator, "async_start", return_value=cancels[0]),
@@ -117,15 +118,18 @@ async def test_stop_cancels_everything(hass, coordinator):
 # Sensor data
 # ===========================================================================
 def test_no_sensor_data_before_advertisement(coordinator):
+    """No sensor data before advertisement."""
     assert coordinator.has_sensor_data is False
 
 
 def test_name_only_advertisement_is_not_sensor_data(coordinator):
+    """Name only advertisement is not sensor data."""
     advertise(coordinator, service_info())
     assert coordinator.has_sensor_data is False
 
 
 def test_sensor_advertisement_is_sensor_data(coordinator):
+    """Sensor advertisement is sensor data."""
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     assert coordinator.has_sensor_data is True
 
@@ -133,34 +137,37 @@ def test_sensor_advertisement_is_sensor_data(coordinator):
 def test_sensor_data_flagged_before_controller_notifies(coordinator, controller):
     """Entities write their state from the controller's callbacks."""
     seen = []
-    controller.set_ble_device_and_advertisement_data.side_effect = (
-        lambda *_: seen.append(coordinator.has_sensor_data)
-    )
+    controller.set_ble_device_and_advertisement_data.side_effect = lambda *_: seen.append(coordinator.has_sensor_data)
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     assert seen == [True]
 
 
 def test_seed_has_no_fan_data(coordinator):
+    """Seed has no fan data."""
     assert coordinator.has_fan_data is False
 
 
 def test_a_reported_fan_level_is_fan_data(coordinator, controller):
+    """A reported fan level is fan data."""
     controller.state = replace(SEED_STATE, fan=0)
     assert coordinator.has_fan_data is True
 
 
 def test_unparseable_sensor_advertisement_is_ignored(coordinator, controller):
+    """Unparseable sensor advertisement is ignored."""
     controller.set_ble_device_and_advertisement_data.side_effect = ValueError("bad")
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     assert coordinator.has_sensor_data is True
 
 
 def test_name_only_advertisement_is_not_parsed(coordinator, controller):
+    """Name only advertisement is not parsed."""
     advertise(coordinator, service_info())
     controller.set_ble_device_and_advertisement_data.assert_not_called()
 
 
 def test_any_advertisement_makes_the_device_ready(coordinator):
+    """Any advertisement makes the device ready."""
     advertise(coordinator, service_info())
     assert coordinator._ready_event.is_set()
 
@@ -181,6 +188,7 @@ async def test_listeners_see_reachability_after_poll(coordinator):
 # A single poll
 # ===========================================================================
 async def test_poll_success_marks_fresh(coordinator, controller):
+    """Poll success marks fresh."""
     assert coordinator.poll_fresh is False
     await coordinator._async_update()
     controller.update.assert_awaited_once()
@@ -194,12 +202,14 @@ async def test_poll_disconnects(coordinator, controller):
 
 
 async def test_failed_disconnect_still_counts_as_success(coordinator, controller):
+    """Failed disconnect still counts as success."""
     controller.disconnect.side_effect = BleakError("gone")
     await coordinator._async_update()
     assert coordinator.poll_fresh is True
 
 
 async def test_failed_poll_disconnects(coordinator, controller):
+    """Failed poll disconnects."""
     controller.update.side_effect = TimeoutError
     with pytest.raises(TimeoutError):
         await coordinator._async_update()
@@ -208,6 +218,7 @@ async def test_failed_poll_disconnects(coordinator, controller):
 
 
 def test_poll_fresh_expires(coordinator):
+    """Poll fresh expires."""
     coordinator._last_poll_ok = time.monotonic() - coordinator_module.POLL_AVAILABLE_WINDOW - 1
     assert coordinator.poll_fresh is False
 
@@ -216,18 +227,21 @@ def test_poll_fresh_expires(coordinator):
 # Poll timing
 # ===========================================================================
 async def test_first_tick_polls_once(coordinator, controller):
+    """First tick polls once."""
     await coordinator._async_tick()
     await coordinator._async_tick()
     controller.update.assert_awaited_once()
 
 
 async def test_no_poll_while_starting(hass, coordinator, controller):
+    """No poll while starting."""
     hass.set_state(CoreState.starting)
     await coordinator._async_tick()
     controller.update.assert_not_awaited()
 
 
 async def test_no_poll_during_active_scan_window(hass, coordinator, controller, window_open):
+    """No poll during active scan window."""
     window_open.return_value = True
     await coordinator._async_tick()
     controller.update.assert_not_awaited()
@@ -239,6 +253,7 @@ async def test_no_poll_during_active_scan_window(hass, coordinator, controller, 
 
 
 async def test_deferred_poll_is_not_a_failure(coordinator, window_open):
+    """Deferred poll is not a failure."""
     window_open.return_value = True
     await coordinator._async_tick()
     assert coordinator._polls.failures == 0
@@ -246,6 +261,7 @@ async def test_deferred_poll_is_not_a_failure(coordinator, window_open):
 
 
 async def test_stalled_poll_waits_for_window_to_close(coordinator, controller, window_open):
+    """Stalled poll waits for window to close."""
     _stall(coordinator)
     window_open.return_value = True
     await coordinator._async_tick()
@@ -253,12 +269,14 @@ async def test_stalled_poll_waits_for_window_to_close(coordinator, controller, w
 
 
 async def test_window_not_checked_when_no_poll_is_due(coordinator, window_open):
+    """Window not checked when no poll is due."""
     _polled(coordinator)
     await coordinator._async_tick()
     window_open.assert_not_called()
 
 
 async def test_no_poll_during_an_operation(coordinator, controller):
+    """No poll during an operation."""
     release = asyncio.Event()
     operation = asyncio.ensure_future(coordinator.async_run(release.wait))
     await asyncio.sleep(0)
@@ -269,12 +287,14 @@ async def test_no_poll_during_an_operation(coordinator, controller):
 
 
 async def test_no_poll_while_device_is_heard(coordinator, controller):
+    """No poll while device is heard."""
     _polled(coordinator)
     await coordinator._async_tick()
     controller.update.assert_not_awaited()
 
 
 async def test_sensor_advertisement_postpones_stall_poll(coordinator, controller):
+    """Sensor advertisement postpones stall poll."""
     _stall(coordinator)
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     await coordinator._async_tick()
@@ -290,6 +310,7 @@ async def test_name_only_advertisement_does_not_postpone_stall_poll(coordinator,
 
 
 async def test_polls_once_per_stall(coordinator, controller):
+    """Polls once per stall."""
     _stall(coordinator)
     await coordinator._async_tick()
     await coordinator._async_tick()
@@ -298,6 +319,7 @@ async def test_polls_once_per_stall(coordinator, controller):
 
 
 async def test_failed_poll_backs_off(coordinator, controller):
+    """Failed poll backs off."""
     _stall(coordinator)
     controller.update.side_effect = TimeoutError
     await coordinator._async_tick()
@@ -326,6 +348,7 @@ async def test_listeners_reevaluated_while_stalled(coordinator, controller):
 # Clock sync timing
 # ===========================================================================
 async def test_due_clock_syncs_on_the_tick(coordinator, controller):
+    """Due clock syncs on the tick."""
     _polled(coordinator)
     coordinator.clock.mark_due()
     await coordinator._async_tick()
@@ -335,6 +358,7 @@ async def test_due_clock_syncs_on_the_tick(coordinator, controller):
 
 
 async def test_listeners_hear_each_clock_sync(coordinator):
+    """Listeners hear each clock sync."""
     _polled(coordinator)
     coordinator.clock.mark_due()
     with patch.object(coordinator, "async_update_listeners", MagicMock()) as listeners:
@@ -343,6 +367,7 @@ async def test_listeners_hear_each_clock_sync(coordinator):
 
 
 async def test_first_tick_polls_and_syncs_the_clock(coordinator, controller):
+    """First tick polls and syncs the clock."""
     coordinator.clock.mark_due()
     await coordinator._async_tick()
     controller.update.assert_awaited_once()
@@ -350,6 +375,7 @@ async def test_first_tick_polls_and_syncs_the_clock(coordinator, controller):
 
 
 async def test_no_clock_sync_while_starting(hass, coordinator, controller):
+    """No clock sync while starting."""
     hass.set_state(CoreState.starting)
     coordinator.clock.mark_due()
     await coordinator._async_tick()
@@ -357,6 +383,7 @@ async def test_no_clock_sync_while_starting(hass, coordinator, controller):
 
 
 async def test_clock_sync_waits_for_window_to_close(coordinator, controller, window_open):
+    """Clock sync waits for window to close."""
     _polled(coordinator)
     coordinator.clock.mark_due()
     window_open.return_value = True
@@ -369,6 +396,7 @@ async def test_clock_sync_waits_for_window_to_close(coordinator, controller, win
 
 
 async def test_failed_clock_sync_retries_after_backoff(coordinator, controller):
+    """Failed clock sync retries after backoff."""
     _polled(coordinator)
     coordinator.clock.mark_due()
     controller.set_clock.side_effect = TimeoutError
@@ -379,6 +407,7 @@ async def test_failed_clock_sync_retries_after_backoff(coordinator, controller):
 
 
 async def test_time_zone_change_makes_the_clock_due(hass, coordinator):
+    """Time zone change makes the clock due."""
     with (
         patch.object(PassiveBluetoothDataUpdateCoordinator, "async_start"),
         patch.object(coordinator_module.bluetooth, "async_register_callback"),
@@ -391,7 +420,6 @@ async def test_time_zone_change_makes_the_clock_due(hass, coordinator):
 
 
 def test_other_config_changes_leave_the_clock_alone(coordinator):
-    coordinator._async_core_config_updated(
-        Event(EVENT_CORE_CONFIG_UPDATE, {"elevation": 286})
-    )
+    """Other config changes leave the clock alone."""
+    coordinator._async_core_config_updated(Event(EVENT_CORE_CONFIG_UPDATE, {"elevation": 286}))
     assert coordinator.clock.is_due(dt_util.utcnow()) is False

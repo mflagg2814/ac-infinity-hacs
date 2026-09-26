@@ -1,5 +1,4 @@
 """AC Infinity Coordinator."""
-from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -11,9 +10,7 @@ import time
 from bleak.backends.device import BLEDevice
 
 from homeassistant.components import bluetooth
-from homeassistant.components.bluetooth.passive_update_coordinator import (
-    PassiveBluetoothDataUpdateCoordinator,
-)
+from homeassistant.components.bluetooth.passive_update_coordinator import PassiveBluetoothDataUpdateCoordinator
 from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import CALLBACK_TYPE, CoreState, Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
@@ -39,9 +36,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 @callback
-def _ignore_advertisement(
-    service_info: bluetooth.BluetoothServiceInfoBleak, change: bluetooth.BluetoothChange
-) -> None:
+def _ignore_advertisement(service_info: bluetooth.BluetoothServiceInfoBleak, change: bluetooth.BluetoothChange) -> None:
     """The coordinator's own callback handles advertisements."""
 
 
@@ -61,6 +56,7 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
         ble_device: BLEDevice,
         controller: ACInfinityController,
     ) -> None:
+        """Initialize the coordinator."""
         # Passive, so HA adds no default 5-minute windows; async_start requests 60s ones.
         super().__init__(
             hass,
@@ -72,7 +68,6 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
         self.ble_device = ble_device
         self.controller = controller
         self._ready_event = asyncio.Event()
-        self._was_unavailable = True
         self._operation_lock = asyncio.Lock()
         self._last_poll_ok: float | None = None
         self._sensor_data_received = False
@@ -97,10 +92,7 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
     @property
     def poll_fresh(self) -> bool:
         """Return True if a poll succeeded recently enough to trust the device."""
-        return (
-            self._last_poll_ok is not None
-            and time.monotonic() - self._last_poll_ok < POLL_AVAILABLE_WINDOW
-        )
+        return self._last_poll_ok is not None and time.monotonic() - self._last_poll_ok < POLL_AVAILABLE_WINDOW
 
     @callback
     def async_start(self) -> CALLBACK_TYPE:
@@ -109,9 +101,7 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
             super().async_start(),
             self._async_request_scan_windows(),
             async_track_time_interval(self.hass, self._async_tick, TICK_INTERVAL),
-            self.hass.bus.async_listen(
-                EVENT_CORE_CONFIG_UPDATE, self._async_core_config_updated
-            ),
+            self.hass.bus.async_listen(EVENT_CORE_CONFIG_UPDATE, self._async_core_config_updated),
         )
 
         @callback
@@ -150,7 +140,7 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
     async def _async_disconnect(self) -> None:
         try:
             await self.controller.disconnect()
-        except Exception as ex:  # pylint: disable=broad-except
+        except Exception as ex:  # noqa: BLE001 - the next operation reconnects regardless
             _LOGGER.debug("%s: Disconnect failed: %s", self.ble_device.name, ex)
 
     async def _async_update(self) -> None:
@@ -171,9 +161,7 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
         clock_due = self.clock.is_due(dt_util.utcnow())
         if poll_due or clock_due:
             if active_window_open(self.hass, self.address):
-                _LOGGER.debug(
-                    "%s: Deferred; active scan window open", self.ble_device.name
-                )
+                _LOGGER.debug("%s: Deferred; active scan window open", self.ble_device.name)
             else:
                 if poll_due:
                     await self._async_attempt_poll(now)
@@ -188,7 +176,7 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
         self._polls.mark_attempt(now)
         try:
             await self._async_update()
-        except Exception as ex:  # pylint: disable=broad-except
+        except Exception as ex:  # noqa: BLE001 - any failure backs off and retries
             self._polls.mark_failure()
             _LOGGER.debug(
                 "%s: Poll failed (%d consecutive): %s",
@@ -198,14 +186,6 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
             )
         else:
             _LOGGER.debug("%s: Poll succeeded", self.ble_device.name)
-
-    @callback
-    def _async_handle_unavailable(
-        self, service_info: bluetooth.BluetoothServiceInfoBleak
-    ) -> None:
-        """Handle the device going unavailable."""
-        super()._async_handle_unavailable(service_info)
-        self._was_unavailable = True
 
     @callback
     def _async_handle_bluetooth_event(
@@ -218,23 +198,16 @@ class ACInfinityDataUpdateCoordinator(PassiveBluetoothDataUpdateCoordinator):
         if carries_sensor_data(service_info):
             self._async_parse_sensor_data(service_info)
         self._ready_event.set()
-        self.logger.debug(
-            "%s: AC Infinity data: %s", self.ble_device.address, self.controller.state
-        )
-        self._was_unavailable = False
+        self.logger.debug("%s: AC Infinity data: %s", self.ble_device.address, self.controller.state)
         super()._async_handle_bluetooth_event(service_info, change)
 
     @callback
-    def _async_parse_sensor_data(
-        self, service_info: bluetooth.BluetoothServiceInfoBleak
-    ) -> None:
+    def _async_parse_sensor_data(self, service_info: bluetooth.BluetoothServiceInfoBleak) -> None:
         # Before parsing: the controller notifies entities while it parses.
         self._sensor_data_received = True
         self._polls.mark_heard(time.monotonic())
         try:
-            self.controller.set_ble_device_and_advertisement_data(
-                service_info.device, service_info.advertisement
-            )
+            self.controller.set_ble_device_and_advertisement_data(service_info.device, service_info.advertisement)
         except ValueError as ex:
             _LOGGER.debug("%s: Ignored advertisement: %s", self.ble_device.name, ex)
 

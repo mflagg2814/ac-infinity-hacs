@@ -1,18 +1,19 @@
-from __future__ import annotations
+"""Connection and commands for one AC Infinity controller."""
 
 import asyncio
-import logging
 from collections.abc import Callable
 from dataclasses import fields, replace
 from datetime import datetime
+import logging
 
+from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
-from bleak.backends.service import BleakGATTCharacteristic, BleakGATTServiceCollection
-from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS
+from bleak.backends.service import BleakGATTServiceCollection
+from bleak.exc import BleakError
 from bleak_retry_connector import (
+    BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS,
     BleakClientWithServiceCache,
-    BleakError,
     BleakNotFoundError,
     establish_connection,
     retry_bluetooth_connection_error,
@@ -31,8 +32,7 @@ from .exceptions import CharacteristicMissingError, ParameterValidationError
 from .models import DeviceInfo, PortState
 from .modes import ControllerMode
 from .protocol import Protocol, is_command_header, parse_manufacturer_data
-from .telemetry import frame_length as telemetry_frame_length
-from .telemetry import parse_telemetry
+from .telemetry import frame_length as telemetry_frame_length, parse_telemetry
 
 CONNECT_TIMEOUT = 30
 GATT_TIMEOUT = 10
@@ -47,6 +47,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ACInfinityController:
+    """Keeps a controller's state and sends it commands over GATT."""
+
     def __init__(
         self,
         ble_device: BLEDevice,
@@ -57,17 +59,17 @@ class ACInfinityController:
         disconnect_delay: float = DISCONNECT_DELAY,
     ) -> None:
         """Init the ACInfinityController."""
-        if not state and not advertisement_data:
-            raise ValueError("Must provide either state or advertisement_data")
+        if state is None:
+            if advertisement_data is None:
+                raise ValueError("Must provide either state or advertisement_data")
+            state = parse_manufacturer_data(advertisement_data.manufacturer_data[MANUFACTURER_ID])
 
         self._ble_device = ble_device
         self._ble_device_provider = ble_device_provider
         self._disconnect_delay = disconnect_delay
         self._advertisement_data = advertisement_data
         self._operation_lock = asyncio.Lock()
-        self._state = state or parse_manufacturer_data(
-            advertisement_data.manufacturer_data[MANUFACTURER_ID]  # type: ignore
-        )
+        self._state = state
         self._connect_lock: asyncio.Lock = asyncio.Lock()
         self._read_char: BleakGATTCharacteristic | None = None
         self._write_char: BleakGATTCharacteristic | None = None
@@ -95,15 +97,12 @@ class ACInfinityController:
         """Set the ble device."""
         self._ble_device = ble_device
         self._advertisement_data = advertisement_data
-        info = parse_manufacturer_data(
-            advertisement_data.manufacturer_data[MANUFACTURER_ID]
-        )
+        info = parse_manufacturer_data(advertisement_data.manufacturer_data[MANUFACTURER_ID])
         # Advertisements do not contain saved ON/OFF presets or port settings.
         updates = {
             field.name: getattr(info, field.name)
             for field in fields(info)
-            if field.name
-            not in {"ports", "level_on", "level_off", "device_information"}
+            if field.name not in {"ports", "level_on", "level_off", "device_information"}
             and getattr(info, field.name) is not None
         }
         if len(advertisement_data.manufacturer_data[MANUFACTURER_ID]) == 27:
@@ -124,10 +123,7 @@ class ACInfinityController:
     @property
     def is_on(self) -> bool:
         """Get whether the device is on."""
-        return (
-            self._state.work_type is not None
-            and self._state.work_type != ControllerMode.OFF
-        )
+        return self._state.work_type is not None and self._state.work_type != ControllerMode.OFF
 
     @property
     def speed(self) -> int:
@@ -175,9 +171,7 @@ class ACInfinityController:
         if not codec.profile.writable:
             return
         before = self._state.ports.get(port)
-        command = self._protocol.get_parameters(
-            self._state, port, list(codec.profile.read_tags), self.sequence
-        )
+        command = self._protocol.get_parameters(self._state, port, list(codec.profile.read_tags), self.sequence)
         data = await self._send_command(command)
         values = self._protocol.parse_parameters(data, self._state, port)
         if (
@@ -190,9 +184,7 @@ class ACInfinityController:
             )
         ):
             raise ValueError("Port changed while the settings read was pending")
-        old = self._state.ports.get(
-            port, PortState(port, level=self._state.fan if port == 0 else None)
-        )
+        old = self._state.ports.get(port, PortState(port, level=self._state.fan if port == 0 else None))
         current = codec.decode_output(values, old)
         self._publish_port(current, CallbackType.UPDATE_RESPONSE)
 
@@ -227,21 +219,13 @@ class ACInfinityController:
             )
         self._fire_callbacks(kind)
 
-    async def set_output(
-        self, port: int, *, on: bool, level: int | None = None
-    ) -> None:
+    async def set_output(self, port: int, *, on: bool, level: int | None = None) -> None:
         """Control one output, publishing only after a successful matching ACK."""
         codec = ParameterCodec(self._state.profile)
         # Validate levels before any Bluetooth traffic, including read-modify-write.
-        if level is not None and (
-            isinstance(level, bool)
-            or not isinstance(level, int)
-            or not 0 <= level <= 10
-        ):
+        if level is not None and (isinstance(level, bool) or not isinstance(level, int) or not 0 <= level <= 10):
             raise ValueError("Level must be an integer between 0 and 10")
-        if port and (
-            port not in self._state.ports or not self._state.ports[port].connected
-        ):
+        if port and (port not in self._state.ports or not self._state.ports[port].connected):
             raise ValueError("Port is not connected")
         if codec.profile.packed_manual_level and on and level is not None:
             # APK tp1 (>7) / ml2: manual speed occupies the upper nibble;
@@ -249,9 +233,7 @@ class ACInfinityController:
             await self.update(port)
         old = self._state.ports.get(
             port,
-            PortState(
-                port, level_on=self._state.level_on, level_off=self._state.level_off
-            ),
+            PortState(port, level_on=self._state.level_on, level_off=self._state.level_off),
         )
         command = self._protocol.set_parameters(
             self._state,
@@ -272,12 +254,15 @@ class ACInfinityController:
         self._publish_port(current, CallbackType.UPDATE_RESPONSE)
 
     async def turn_on(self, speed: int | None = None) -> None:
+        """Turn the controller output on, at speed if given."""
         await self.set_output(0, on=True, level=speed)
 
     async def turn_off(self) -> None:
+        """Turn the controller output off."""
         await self.set_output(0, on=False)
 
     async def set_speed(self, speed: int) -> None:
+        """Set the output level; 0 turns it off."""
         await self.set_output(0, on=speed > 0, level=speed)
 
     async def set_clock(self, now: Callable[[], datetime]) -> None:
@@ -291,9 +276,7 @@ class ACInfinityController:
 
     async def read_clock(self, reference: datetime) -> datetime:
         """Read the clock, taking its century from reference."""
-        command = self._protocol.get_parameters(
-            self._state, 0, [CLOCK_TAG], self.sequence
-        )
+        command = self._protocol.get_parameters(self._state, 0, [CLOCK_TAG], self.sequence)
         data = await self._send_command(command)
         values = self._protocol.parse_parameters(data, self._state, 0)
         if CLOCK_TAG not in values:
@@ -323,9 +306,7 @@ class ACInfinityController:
             except Exception:
                 _LOGGER.exception("%s: State callback failed", self.name)
 
-    def register_callback(
-        self, callback: Callable[[DeviceInfo, CallbackType], None]
-    ) -> Callable[[], None]:
+    def register_callback(self, callback: Callable[[DeviceInfo, CallbackType], None]) -> Callable[[], None]:
         """Register a callback to be called when the state changes."""
 
         def unregister_callback() -> None:
@@ -371,40 +352,7 @@ class ACInfinityController:
             _LOGGER.debug("%s: Connected; RSSI: %s", self.name, self.rssi)
             self._client = client
             try:
-                if self._stopped:
-                    raise BleakError("Controller stopped while connecting")
-                resolved = self._resolve_characteristics(client.services)
-                if not resolved or self._read_char is None:
-                    if not self._cache_recovery_attempted:
-                        self._cache_recovery_attempted = True
-                        try:
-                            async with asyncio.timeout(GATT_TIMEOUT):
-                                cleared = await client.clear_cache()
-                        except (BleakError, NotImplementedError):
-                            cleared = False
-                        if cleared:
-                            # The transport retry reconnects after cleanup and
-                            # obtains a fresh HA route and service collection.
-                            raise BleakError(
-                                "Service cache cleared; reconnect required"
-                            )
-                    raise CharacteristicMissingError(
-                        "AC Infinity read/write characteristics missing"
-                    )
-
-                def notification_handler(
-                    sender: BleakGATTCharacteristic, data: bytearray
-                ) -> None:
-                    # Late callbacks from an old connection cannot satisfy a retry.
-                    if self._client is client:
-                        self._notification_handler(sender, data)
-
-                async with asyncio.timeout(GATT_TIMEOUT):
-                    await client.start_notify(self._read_char, notification_handler)
-                if self._client is not client or not client.is_connected:
-                    raise BleakError("Disconnected while subscribing to notifications")
-                await self._read_device_information(client)
-                self._cache_recovery_attempted = False
+                await self._start_session(client)
             except BaseException:
                 read_char = self._read_char
                 self._client = None
@@ -414,9 +362,42 @@ class ACInfinityController:
                 raise
             self._reset_disconnect_timer()
 
-    async def _read_device_information(
-        self, client: BleakClientWithServiceCache
-    ) -> None:
+    async def _start_session(self, client: BleakClientWithServiceCache) -> None:
+        """Resolve characteristics, subscribe, and read device information."""
+        if self._stopped:
+            raise BleakError("Controller stopped while connecting")
+        if not self._resolve_characteristics(client.services) or self._read_char is None:
+            await self._recover_service_cache(client)
+            raise CharacteristicMissingError("AC Infinity read/write characteristics missing")
+
+        def notification_handler(sender: BleakGATTCharacteristic, data: bytearray) -> None:
+            # Late callbacks from an old connection cannot satisfy a retry.
+            if self._client is client:
+                self._notification_handler(sender, data)
+
+        async with asyncio.timeout(GATT_TIMEOUT):
+            await client.start_notify(self._read_char, notification_handler)
+        if self._client is not client or not client.is_connected:
+            raise BleakError("Disconnected while subscribing to notifications")
+        await self._read_device_information(client)
+        self._cache_recovery_attempted = False
+
+    async def _recover_service_cache(self, client: BleakClientWithServiceCache) -> None:
+        """Clear a service cache lacking the characteristics, once between successful sessions."""
+        if self._cache_recovery_attempted:
+            return
+        self._cache_recovery_attempted = True
+        try:
+            async with asyncio.timeout(GATT_TIMEOUT):
+                cleared = await client.clear_cache()
+        except BleakError, NotImplementedError:
+            cleared = False
+        if cleared:
+            # The transport retry reconnects after cleanup and
+            # obtains a fresh HA route and service collection.
+            raise BleakError("Service cache cleared; reconnect required")
+
+    async def _read_device_information(self, client: BleakClientWithServiceCache) -> None:
         """Read optional revisions once per runtime, inside the connection lock.
 
         Failed reads may retry on a later connection. No extra connection is
@@ -432,9 +413,7 @@ class ACInfinityController:
                     if characteristic is None:
                         continue
                     try:
-                        value = decode_revision(
-                            await client.read_gatt_char(characteristic)
-                        )
+                        value = decode_revision(await client.read_gatt_char(characteristic))
                     except BleakError:
                         complete = False
                         if not client.is_connected:
@@ -443,9 +422,7 @@ class ACInfinityController:
                     if value is not None:
                         self._state = replace(
                             self._state,
-                            device_information=replace(
-                                self._state.device_information, **{field: value}
-                            ),
+                            device_information=replace(self._state.device_information, **{field: value}),
                         )
         except TimeoutError:
             complete = False
@@ -453,18 +430,14 @@ class ACInfinityController:
             raise BleakError("Disconnected while reading device information")
         self._device_information_read = complete
 
-    def _notification_handler(
-        self, _sender: BleakGATTCharacteristic | int, data: bytearray
-    ) -> None:
+    def _notification_handler(self, _sender: BleakGATTCharacteristic | int, data: bytearray) -> None:
         """Handle notification responses."""
         _LOGGER.debug("%s: Notification received: %s", self.name, data.hex())
         if data[:2] == b"\x1e\xff" or self._telemetry_buffer:
             # Telemetry and command frames have independent assembly buffers.
             if data[:2] == b"\x1e\xff":
                 self._telemetry_buffer.clear()
-            if data[:2] == b"\x1e\xff" or (
-                not is_command_header(data) and not self._response_buffer
-            ):
+            if data[:2] == b"\x1e\xff" or (not is_command_header(data) and not self._response_buffer):
                 self._telemetry_buffer.extend(data)
                 size = telemetry_frame_length(self._telemetry_buffer, self._state)
                 if size is None or len(self._telemetry_buffer) < size:
@@ -474,9 +447,7 @@ class ACInfinityController:
                     updated = replace(
                         updated,
                         ports={
-                            port_id: port.with_saved_levels(
-                                self._state.ports.get(port_id)
-                            )
+                            port_id: port.with_saved_levels(self._state.ports.get(port_id))
                             for port_id, port in updated.ports.items()
                         },
                     )
@@ -493,40 +464,39 @@ class ACInfinityController:
             if data[:2] == b"\x1e\xff":
                 return
             try:
-                # Notifications may split a response across several ATT packets.
-                # A fresh valid header also recovers from an abandoned fragment.
-                if len(data) >= 8 and is_command_header(data):
-                    self._protocol.response_frame_length(data)
-                    self._response_buffer.clear()
-                self._response_buffer.extend(data)
-                packet = self._response_buffer
-                if len(packet) < 8:
-                    if packet[:2] not in (b"", b"\xa5") and not is_command_header(
-                        packet
-                    ):
-                        raise ValueError("Invalid response prefix")
-                    return
-                frame_length = self._protocol.response_frame_length(packet)
-                if len(packet) < frame_length:
-                    return
-                self._protocol.parse_response(
-                    packet, self._pending_sequence, self._pending_command
-                )
+                packet = self._assemble_response(data)
             except ValueError as ex:
                 self._response_buffer.clear()
                 _LOGGER.debug("%s: Ignoring notification: %s", self.name, ex)
                 return
-            self._notify_future.set_result(bytearray(packet))
+            if packet is not None:
+                self._notify_future.set_result(packet)
+                self._response_buffer.clear()
+
+    def _assemble_response(self, data: bytearray) -> bytearray | None:
+        """Buffer a response fragment; the whole validated frame once it's complete."""
+        # Notifications may split a response across several ATT packets.
+        # A fresh valid header also recovers from an abandoned fragment.
+        if len(data) >= 8 and is_command_header(data):
+            self._protocol.response_frame_length(data)
             self._response_buffer.clear()
+        self._response_buffer.extend(data)
+        packet = self._response_buffer
+        if len(packet) < 8:
+            if bytes(packet[:2]) not in (b"", b"\xa5") and not is_command_header(packet):
+                raise ValueError("Invalid response prefix")
+            return None
+        if len(packet) < self._protocol.response_frame_length(packet):
+            return None
+        self._protocol.parse_response(packet, self._pending_sequence, self._pending_command)
+        return bytearray(packet)
 
     def _reset_disconnect_timer(self) -> None:
         """Reset disconnect timer."""
         if self._disconnect_timer:
             self._disconnect_timer.cancel()
         self._expected_disconnect = False
-        self._disconnect_timer = self.loop.call_later(
-            self._disconnect_delay, self._disconnect
-        )
+        self._disconnect_timer = self.loop.call_later(self._disconnect_delay, self._disconnect)
 
     def _disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Disconnected callback."""
@@ -541,9 +511,7 @@ class ACInfinityController:
         if self._notify_future and not self._notify_future.done():
             self._notify_future.set_exception(BleakError("Disconnected during command"))
         if self._expected_disconnect:
-            _LOGGER.debug(
-                "%s: Disconnected from device; RSSI: %s", self.name, self.rssi
-            )
+            _LOGGER.debug("%s: Disconnected from device; RSSI: %s", self.name, self.rssi)
             return
         _LOGGER.warning(
             "%s: Device unexpectedly disconnected; RSSI: %s",
@@ -555,9 +523,7 @@ class ACInfinityController:
         """Disconnect from device."""
         self._disconnect_timer = None
         if self._disconnect_task is None or self._disconnect_task.done():
-            self._disconnect_task = asyncio.create_task(
-                self._execute_timed_disconnect()
-            )
+            self._disconnect_task = asyncio.create_task(self._execute_timed_disconnect())
 
     async def _execute_timed_disconnect(self) -> None:
         """Execute timed disconnection."""
@@ -645,11 +611,10 @@ class ACInfinityController:
             try:
                 return await self._send_command_locked(command)
             except BleakNotFoundError:
-                _LOGGER.error(
+                _LOGGER.exception(
                     "%s: device not found, no longer in range, or poor RSSI: %s",
                     self.name,
                     self.rssi,
-                    exc_info=True,
                 )
                 raise
             except CharacteristicMissingError as ex:

@@ -1,19 +1,16 @@
 """PollSchedule: first poll, stall detection, and backoff."""
-from __future__ import annotations
 
-from custom_components.ac_infinity.backoff import (
-    BACKOFF_BASE,
-    MAX_BACKOFF,
-    MAX_BACKOFF_EXPONENT,
-)
+from custom_components.ac_infinity.backoff import BACKOFF_BASE, MAX_BACKOFF, MAX_BACKOFF_EXPONENT
 from custom_components.ac_infinity.polling import STALL_AFTER, PollSchedule
 
 
 def test_first_poll_is_due_immediately():
+    """First poll is due immediately."""
     assert PollSchedule(last_heard=0).is_due(0)
 
 
 def test_not_due_after_first_poll_until_stalled():
+    """Not due after first poll until stalled."""
     schedule = PollSchedule(last_heard=0)
     schedule.mark_success(0)
     assert not schedule.is_due(STALL_AFTER - 1)
@@ -21,18 +18,21 @@ def test_not_due_after_first_poll_until_stalled():
 
 
 def test_stall_boundary():
+    """Stall boundary."""
     schedule = PollSchedule(last_heard=1000)
     assert not schedule.is_stalled(1000 + STALL_AFTER - 1)
     assert schedule.is_stalled(1000 + STALL_AFTER)
 
 
 def test_hearing_the_device_resets_the_stall():
+    """Hearing the device resets the stall."""
     schedule = PollSchedule(last_heard=0, polled=True)
     schedule.mark_heard(STALL_AFTER)
     assert not schedule.is_due(STALL_AFTER + 1)
 
 
 def test_failed_first_poll_backs_off():
+    """Failed first poll backs off."""
     schedule = PollSchedule(last_heard=0)
     schedule.mark_attempt(0)
     schedule.mark_failure()
@@ -41,6 +41,7 @@ def test_failed_first_poll_backs_off():
 
 
 def test_backoff_after_failure():
+    """Backoff after failure."""
     schedule = PollSchedule(last_heard=0, polled=True)
     now = STALL_AFTER
     schedule.mark_attempt(now)
@@ -51,6 +52,7 @@ def test_backoff_after_failure():
 
 
 def test_backoff_is_capped():
+    """Backoff is capped."""
     schedule = PollSchedule(last_heard=0)
     for _ in range(MAX_BACKOFF_EXPONENT + 3):
         schedule.mark_failure()
@@ -59,6 +61,7 @@ def test_backoff_is_capped():
 
 
 def test_success_clears_failures_and_stall():
+    """Success clears failures and stall."""
     schedule = PollSchedule(last_heard=0, failures=3, last_attempt=STALL_AFTER)
     schedule.mark_success(STALL_AFTER + 5)
     assert schedule.failures == 0

@@ -1,5 +1,4 @@
 """The library is vendored, so Home Assistant installs nothing for this integration."""
-from __future__ import annotations
 
 import ast
 import json
@@ -20,6 +19,7 @@ def _absolute_imports(source: str) -> set[str]:
 
 
 def test_no_requirements():
+    """No requirements."""
     assert MANIFEST["requirements"] == []
 
 

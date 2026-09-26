@@ -73,10 +73,12 @@ MODEL_NUMBERS = {
 
 
 def is_h4(device_type: int, version: int) -> bool:
-    return device_type == 51 or device_type in H_TYPES and version >= 20
+    """Whether the model speaks the extended H4 protocol."""
+    return device_type == 51 or (device_type in H_TYPES and version >= 20)
 
 
 def family(device_type: int) -> str:
+    """The model family letter that prefixes device names."""
     if device_type in SENSOR_TYPES:
         return "C"
     if device_type in H_TYPES:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""Bluetooth control for AC Infinity controllers."""
 
 __version__ = "1.0.0"
 
@@ -20,18 +20,18 @@ from .routing import ProtocolProfile, resolve_profile
 
 __all__ = [
     "ACInfinityController",
-    "CallbackType",
-    "ControllerMode",
-    "HomeMode",
     "ACInfinityError",
-    "ProtocolError",
-    "FrameValidationError",
-    "ParameterValidationError",
+    "CallbackType",
     "CommandRejectedError",
+    "ControllerMode",
     "DeviceInfo",
     "DeviceInformation",
+    "FrameValidationError",
+    "HomeMode",
+    "ParameterValidationError",
     "PortState",
+    "ProtocolError",
     "ProtocolProfile",
-    "resolve_profile",
     "parse_manufacturer_data",
+    "resolve_profile",
 ]
