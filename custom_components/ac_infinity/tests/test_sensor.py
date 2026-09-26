@@ -1,6 +1,7 @@
 """Sensor availability around the stale setup seed."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -17,6 +18,7 @@ from custom_components.ac_infinity.sensor import (
     HumiditySensor,
     TemperatureSensor,
     VpdSensor,
+    outside_band,
 )
 
 from custom_components.ac_infinity.vendor.ac_infinity_ble.const import MANUFACTURER_ID
@@ -60,6 +62,51 @@ def test_unavailable_when_absent_and_poll_is_stale(coordinator, sensor):
     advertise(coordinator, service_info({MANUFACTURER_ID: SENSOR_PAYLOAD}))
     coordinator._available = False
     assert sensor.available is False
+
+
+# ===========================================================================
+# Bands
+# ===========================================================================
+def _read(sensor, device, **state) -> float | None:
+    device._state = replace(device._state, **state)
+    sensor._async_update_attrs()
+    return sensor.native_value
+
+
+def test_temperature_moves_in_tenths(coordinator, seeded_device):
+    sensor = TemperatureSensor(coordinator, seeded_device)
+    assert _read(sensor, seeded_device, tmp=12.56) == 12.56
+    assert _read(sensor, seeded_device, tmp=12.64) == 12.56
+    assert _read(sensor, seeded_device, tmp=12.47) == 12.56
+    assert _read(sensor, seeded_device, tmp=12.66) == 12.66
+
+
+def test_humidity_moves_in_two_percent_steps(coordinator, seeded_device):
+    sensor = HumiditySensor(coordinator, seeded_device)
+    assert _read(sensor, seeded_device, hum=80.0) == 80.0
+    assert _read(sensor, seeded_device, hum=81.0) == 80.0
+    assert _read(sensor, seeded_device, hum=78.0) == 78.0
+
+
+def test_vpd_reports_every_reading(coordinator, seeded_device):
+    sensor = VpdSensor(coordinator, seeded_device)
+    assert _read(sensor, seeded_device, vpd=1.01) == 1.01
+    assert _read(sensor, seeded_device, vpd=1.02) == 1.02
+
+
+def test_missing_reading_resets_the_band(coordinator, seeded_device):
+    sensor = TemperatureSensor(coordinator, seeded_device)
+    _read(sensor, seeded_device, tmp=12.56)
+    assert _read(sensor, seeded_device, tmp=None) is None
+    assert _read(sensor, seeded_device, tmp=12.57) == 12.57
+
+
+@pytest.mark.parametrize(
+    ("kept", "reading", "moved"),
+    [(None, 1.0, True), (1.0, None, True), (23.2, 23.3, True), (23.2, 23.29, False)],
+)
+def test_outside_band(kept, reading, moved):
+    assert outside_band(kept, reading, 0.1) is moved
 
 
 # ===========================================================================

@@ -1,5 +1,6 @@
 """The ac_infinity sensor platform."""
 from __future__ import annotations
+import math
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -50,12 +51,24 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+def outside_band(kept: float | None, reading: float | None, band: float) -> bool:
+    """Whether ``reading`` has moved at least ``band`` from ``kept``."""
+    if kept is None or reading is None:
+        return True
+    change = abs(reading - kept)
+    # Float subtraction lands just under the band, e.g. 23.3 - 23.2.
+    return change >= band or math.isclose(change, band)
+
+
 class ACInfinitySensor(
     PassiveBluetoothCoordinatorEntity[ACInfinityDataUpdateCoordinator], SensorEntity
 ):
     """Representation of AC Infinity sensor."""
 
     _attr_has_entity_name = True
+    # Smallest change reported, in the native unit. Every advertisement carries a
+    # reading, and each change is a recorder row.
+    _band: float = 0
 
     def __init__(
         self,
@@ -73,10 +86,15 @@ class ACInfinitySensor(
         """Unavailable until a sensor advertisement arrives; then while the device is reachable."""
         return self.coordinator.has_sensor_data and self.coordinator.reachable
 
+    def _reading(self) -> float | None:
+        raise NotImplementedError("Not yet implemented.")
+
     @callback
     def _async_update_attrs(self) -> None:
-        """Handle updating _attr values."""
-        raise NotImplementedError("Not yet implemented.")
+        """Take the device's reading once it clears the band."""
+        reading = self._reading()
+        if outside_band(self._attr_native_value, reading, self._band):
+            self._attr_native_value = reading
 
     @callback
     def _handle_coordinator_update(self, *args: Any) -> None:
@@ -96,32 +114,30 @@ class TemperatureSensor(ACInfinitySensor):
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _band = 0.1
 
     @property
     def unique_id(self) -> str:
         """Return a unique, Home Assistant friendly identifier for this entity."""
         return f"{self._device.address}_tmp"
 
-    @callback
-    def _async_update_attrs(self) -> None:
-        """Handle updating _attr values."""
-        self._attr_native_value = self._device.temperature
+    def _reading(self) -> float | None:
+        return self._device.temperature
 
 
 class HumiditySensor(ACInfinitySensor):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _band = 2
 
     @property
     def unique_id(self) -> str:
         """Return a unique, Home Assistant friendly identifier for this entity."""
         return f"{self._device.address}_hum"
 
-    @callback
-    def _async_update_attrs(self) -> None:
-        """Handle updating _attr values."""
-        self._attr_native_value = self._device.humidity
+    def _reading(self) -> float | None:
+        return self._device.humidity
 
 
 class VpdSensor(ACInfinitySensor):
@@ -135,10 +151,8 @@ class VpdSensor(ACInfinitySensor):
         """Return a unique, Home Assistant friendly identifier for this entity."""
         return f"{self._device.address}_vpd"
 
-    @callback
-    def _async_update_attrs(self) -> None:
-        """Handle updating _attr values."""
-        self._attr_native_value = self._device.vpd
+    def _reading(self) -> float | None:
+        return self._device.vpd
 
 
 class ClockSensor(

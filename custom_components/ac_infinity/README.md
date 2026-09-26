@@ -46,6 +46,8 @@ runs from a 30-second tick. There's one after startup, for the work mode and lev
 then one only when no sensor data or successful poll has arrived for 15 minutes, with
 exponential backoff on failures. A due poll waits while any scanner that hears the
 device is in an auto-mode active scan window.
+* **Reading bands** (`sensor.py`): temperature changes only in steps of at least
+0.1 °C and humidity 2%.
 
 ### Rules that keep readings flowing
 
